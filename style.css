@@ -1,14 +1,34 @@
 @CHARSET "UTF-8";
 
+html {
+	font-family: sans-serif;
+}
+
 /* body and header text */
 body {
-	font-family: 'Work Sans', sans-serif;
 	font-size: 18px;
+	background-image: url('background.jpg');
+	background-size: cover;
+	background-repeat: no-repeat;
+	background-color: black;
 }
 
 body a {
 	text-decoration: none;
-	color: #12B2B1;
+}
+
+.dan {
+	height: 50vh;
+}
+
+.dan img {
+	height: 50vh;
+}
+
+@media (max-width: 600px) {
+	.dan {
+		height: 20vh;
+	}
 }
 
 h1 {
@@ -20,7 +40,6 @@ h1 a {
 }
 
 #bigtext {
-	font-family: 'Work Sans', sans-serif;
 	font-size: 35px;
 }
 
@@ -45,7 +64,7 @@ h1 a {
 	float: right;
 	position: absolute;
 	top: 0;
-	right: 10%;
+	right: 0;
 }
 
 @media (max-width: 600px) {
@@ -58,12 +77,23 @@ h1 a {
 #overlaytext {
 	font-size: 28px;
 	text-align: right;
-	font-family: 'Work Sans', sans-serif;
 	line-height:30px;
+	font-style: italic;
 }
 
-#overlaytext p {
-	line-height: 0px;
+#overlaytext a {
+  background-color: black;
+  color: white;
+  display:inline;
+  white-space:pre-wrap;
+  padding: 5px;
+  padding-left:0px;
+  box-shadow: -10px 0 0 black; /* box shadow is emulating padding liek a charme */
+	transition: box-shadow 0.5s;
+}
+
+#overlaytext a:hover {
+	box-shadow: -40px 0 0 black; /* box shadow is emulating padding liek a charme */
 }
 
 /* content and body */
@@ -76,21 +106,6 @@ h1 a {
 
 #content p {
 	line-height: 30px;
-}
-
-/* image panel */
-#panel {
-	width: 275px;
-	min-height: 275px;
-	margin-left: 0px;
-	display: inline;
-	float: right;
-}
-
-#panel img {
-	float: right;
-	width: 250px;
-	min-height: 250px;
 }
 
 /* form stuff */
