@@ -1,0 +1,139 @@
+<head>
+<script type="text/javascript">
+
+    function formText(formElementName)
+    {
+        return document.getElementById('madlibForm').elements[formElementName].value
+    }
+    function pronoun(pronounText)
+    {
+        switch(pronounText)
+        {
+            case "He":
+                return "his";
+                break;
+            case "She":
+                return "her";
+                break;
+            case "It":
+                return "its";
+                break;
+            case "They":
+                return "their";
+                break;
+            default:
+                return "his";
+        }
+    }
+      function setUpMadlibText() {
+          try{
+        document.getElementById('finaltext').innerHTML =
+"I miss the old " + formText('firstNoun') +
+"<br>straight from " + formText('firstPlace') + " " + formText('firstNoun') +
+"<br>" + formText('firstActionPhrase') + " " + formText('firstNoun') +
+"<br>set on " + pronoun(formText("firstPronoun")) + " goals " + formText('firstNoun') +
+"<br>I hate the new " + formText('firstNoun') +
+"<br> the " + formText('firstAdjective') + " " + formText('secondNoun') + " " + formText('firstNoun') +
+"<br>the " + formText('firstAdverb') + " " + formText('secondAdjective') + " " + formText('firstNoun') +
+"<br> " + formText("secondActionPhrase") + " " + formText('firstNoun') +
+"<br>I miss the " + formText("thirdAdjective") + " " + formText('firstNoun') +
+"<br>" + formText("thirdActionPhrase") + " " + formText('firstNoun') +
+"<br>I gotta say, at that time I'd like to " + formText('firstVerb') + " " + formText('firstNoun') +
+"<br>see I invented " + formText('firstNoun') +
+"<br>it wasn't any " + formText('firstNoun') + "s " +
+"<br>and now I look and look around and there's so many " + formText('firstNoun') + "s " +
+"<br>I used to love " + formText('firstNoun') +
+"<br>I used to love " + formText('firstNoun') +
+"<br>I even had the " + formText('fourthAdjective') + " " + formText('thirdNoun') + " I thought I was " + formText('firstNoun') +
+"<br>what if " + formText('firstNoun') + " made a song, about " + formText('firstNoun') + "?" +
+"<br>called \"I Miss The Old " + formText('firstNoun') + "\" man that would be so " + formText('firstNoun') +
+"<br>that's all it was " + formText('firstNoun') + " we still love " + formText('firstNoun') +
+"<br>and I love you like " + formText('firstNoun') + " loves " + formText('firstNoun');
+}
+catch(e){
+    alert('An error has occurred: '+e.message)
+}
+        return false;
+      }
+
+    </script>
+  </head>
+    	<body>
+    			<a href="index.html">
+    				<img src="dan.svg" class="dan"/>
+    			</a>
+    			<div id="overlay">
+    				<div id="overlaytext">
+    					<p>
+    						<a href="contact.html">contact</a>
+    					</p>
+    					<p>
+    						<a href="bio.html">bio</a>
+    					</p>
+    					<p>
+    						<a href="portfolio.html">portfolio</a>
+    					</p>
+    					<p>
+    						<a href="skills.html">skills</a>
+    					</p>
+    				</div>
+    			</div>
+<div class="home">
+
+  <h1 class="page-heading">I Love Kanye Madlibs</h1>
+
+  <form id="madlibForm" onSubmit="return setUpMadlibText()">
+      <p id="finaltext"></p>
+      Noun/Proper Name:
+      <input type="text" name="firstNoun" /><br />
+
+      Shortened Place Name:
+      <input type="text" name="firstPlace" /><br />
+
+      Four Word Action Phrase:
+      <input type="text" name="firstActionPhrase" /><br />
+
+      Pronoun:
+      <select name="firstPronoun">
+          <option>He</option>
+          <option>She</option>
+          <option>It</option>
+          <option>They</option>
+      </select><br />
+
+      Adjective:
+      <input type="text" name="firstAdjective" /><br />
+
+      Noun:
+      <input type="text" name="secondNoun" /><br />
+
+      Adverb:
+      <input type="text" name="firstAdverb" /><br />
+
+      Adjective:
+      <input type="text" name="secondAdjective" /><br />
+
+      Four Word Action Phrase:
+      <input type="text" name="secondActionPhrase" /><br />
+
+      Adjective:
+      <input type="text" name="thirdAdjective" /><br />
+
+      Four Word Action Phrase:
+      <input type="text" name="thirdActionPhrase" /><br />
+
+      Verb:
+      <input type="text" name="firstVerb" /><br />
+
+      Adjective:
+      <input type="text" name="fourthAdjective" /><br />
+
+      Noun:
+      <input type="text" name="thirdNoun" /><br />
+
+      <input type="submit" value="Submit">
+  </form>
+
+</div>
+</body>
+</html>
