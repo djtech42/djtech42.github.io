@@ -1,38 +1,47 @@
 @CHARSET "UTF-8";
 
+h2 {
+	font-size: 40px;
+}
 .separator-type, .title-type, .intro-type, .content-type .intro-type p {
 	position: relative;
 }
 .intro-type .container {
-	padding: 107px 0px 102px 0px !important;
+	padding: 107px 0px 102px 0px;
 }
 .company-heading h1 {
 	margin-bottom: 60px;
 	padding-bottom: 50px;
 	line-height: 80px;
 	color: #fff;
-	font-weight: 700 !important;
+	font-weight: 700;
 	text-align: center;
 }
 .jumbo {
 	margin-top: 50px;
 }
+.jumbo li {
+	font-size: 20px;
+}
+.jumbotron p {
+	font-weight: 300;
+}
 .seo-header, .product-header,
 .intro-type .container h1.white,
 .company-heading h1 {
-	font-weight: 200 !important;
+	font-weight: 200;
 	text-transform: capitalize;
 	font-size: 55px;
 	margin-bottom: 20px;
 }
 .parallax {
-	background-attachment: inherit !important;
+	background-attachment: inherit;
 }
 .parallax {
-	background-attachment: inherit !important;
+	background-attachment: inherit;
 }
 .parallax {
-	background-attachment: inherit !important;
+	background-attachment: inherit;
 	background-repeat: repeat;
 	background-size: cover;
 	position: absolute;
