@@ -233,20 +233,20 @@ window.LEVELS = [
 window.TUTORIAL = {
   name: 'Tadpole Trail',
   theme: 'meadow',
-  // Signs can be plain text, or { key, touch } to match keyboard or touch controls.
+  // Signs can be plain text, or { key, touch, pad } to match keyboard, touch or gamepad controls.
   signs: [
-    { key: 'Welcome, little frog! Walk with ← → or A D.', touch: 'Welcome, little frog! Walk with the ◀ ▶ buttons.' },
-    { key: 'Jump with Space, Z, W or ↑. Hold jump longer to leap higher. That wall needs a big one!', touch: 'Tap Jump to hop. Hold it longer to leap higher. That wall needs a big one!' },
-    { key: 'Flies are tasty! Hop into them, or flick your tongue with X, J or Shift to grab them from a distance.', touch: 'Flies are tasty! Hop into them, or press Tongue to grab them from a distance.' },
+    { key: 'Welcome, little frog! Walk with ← → or A D.', touch: 'Welcome, little frog! Walk with the ◀ ▶ buttons.', pad: 'Welcome, little frog! Walk with the D-pad or left stick.' },
+    { key: 'Jump with Space, Z, W or ↑. Hold jump longer to leap higher. That wall needs a big one!', touch: 'Tap Jump to hop. Hold it longer to leap higher. That wall needs a big one!', pad: 'Jump with A. Hold it longer to leap higher. That wall needs a big one!' },
+    { key: 'Flies are tasty! Hop into them, or flick your tongue with X, J or Shift to grab them from a distance.', touch: 'Flies are tasty! Hop into them, or press Tongue to grab them from a distance.', pad: 'Flies are tasty! Hop into them, or flick your tongue with X, B or RB to grab them from a distance.' },
     'A beetle! Jump on its back to squash it, or gobble it up with your tongue. Touching it from the side hurts.',
-    { key: 'Jump up through wooden planks from below. To drop back down, hold ↓ and press jump.', touch: 'Jump up through wooden planks from below. To drop back down, hold ▼ and press Jump.' },
-    { key: 'Frogs can swim! Tap or hold jump to paddle up, hold ↓ to dive, and jump near the surface to leap out. Lily pads float on top.', touch: 'Frogs can swim! Tap or hold Jump to paddle up, hold ▼ to dive, and jump near the surface to leap out. Lily pads float on top.' },
+    { key: 'Jump up through wooden planks from below. To drop back down, hold ↓ and press jump.', touch: 'Jump up through wooden planks from below. To drop back down, hold ▼ and press Jump.', pad: 'Jump up through wooden planks from below. To drop back down, hold down and press A.' },
+    { key: 'Frogs can swim! Tap or hold jump to paddle up, hold ↓ to dive, and jump near the surface to leap out. Lily pads float on top.', touch: 'Frogs can swim! Tap or hold Jump to paddle up, hold ▼ to dive, and jump near the surface to leap out. Lily pads float on top.', pad: 'Frogs can swim! Tap or hold A to paddle up, hold down to dive, and jump near the surface to leap out. Lily pads float on top.' },
     'Touch a flag to make it your checkpoint. If you lose a life, you come back to the last flag.',
     'Ride floating logs across gaps. Falling off the bottom of the screen costs a life!',
     'Thorns hurt! You have three hearts per life. Losing all of them costs a life.',
-    { key: 'A vine hook! Hold X, J or Shift to grab it when it lights up, and swing with ← →. Let go to fly, or keep holding and jump to swing straight onto the next hook!', touch: 'A vine hook! Hold Tongue to grab it when it lights up, and swing with ◀ ▶. Let go to fly, or keep holding and tap Jump to swing straight onto the next hook!' },
+    { key: 'A vine hook! Hold X, J or Shift to grab it when it lights up, and swing with ← →. Let go to fly, or keep holding and jump to swing straight onto the next hook!', touch: 'A vine hook! Hold Tongue to grab it when it lights up, and swing with ◀ ▶. Let go to fly, or keep holding and tap Jump to swing straight onto the next hook!', pad: 'A vine hook! Hold X, B or RB to grab it when it lights up, and swing left and right. Let go to fly, or keep holding and press A to swing straight onto the next hook!' },
     'Psst! Some walls are fake. Look for faint cracks and walk right in. Every level hides one golden lily.',
-    { key: 'Reach the lotus flag to finish a level. Press P or Esc any time to pause or quit.', touch: 'Reach the lotus flag to finish a level. Tap the pause button any time to pause or quit.' },
+    { key: 'Reach the lotus flag to finish a level. Press P or Esc any time to pause or quit.', touch: 'Reach the lotus flag to finish a level. Tap the pause button any time to pause or quit.', pad: 'Reach the lotus flag to finish a level. Press Start any time to pause or quit.' },
   ],
   map: [
       '',

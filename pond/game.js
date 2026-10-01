@@ -111,20 +111,22 @@
   // ---------------------------------------------------------------------------
   // Input
   // ---------------------------------------------------------------------------
+  // Gamepad buttons and stick directions show up as virtual keys too (Pad*, Stick*).
   const BINDS = {
-    left: ['ArrowLeft', 'KeyA', 'TouchLeft'],
-    right: ['ArrowRight', 'KeyD', 'TouchRight'],
-    down: ['ArrowDown', 'KeyS', 'TouchDown'],
-    jump: ['Space', 'KeyZ', 'ArrowUp', 'KeyW', 'KeyK', 'TouchJump'],
-    tongue: ['KeyX', 'KeyJ', 'ShiftLeft', 'ShiftRight', 'TouchTongue'],
-    pause: ['KeyP', 'Escape', 'TouchPause'],
-    confirm: ['Enter', 'Space', 'TouchConfirm'],
+    left: ['ArrowLeft', 'KeyA', 'TouchLeft', 'PadLeft', 'StickLeft'],
+    right: ['ArrowRight', 'KeyD', 'TouchRight', 'PadRight', 'StickRight'],
+    down: ['ArrowDown', 'KeyS', 'TouchDown', 'PadDown', 'StickDown'],
+    jump: ['Space', 'KeyZ', 'ArrowUp', 'KeyW', 'KeyK', 'TouchJump', 'PadA'],
+    tongue: ['KeyX', 'KeyJ', 'ShiftLeft', 'ShiftRight', 'TouchTongue', 'PadX', 'PadB', 'PadRB', 'PadRT'],
+    pause: ['KeyP', 'Escape', 'TouchPause', 'PadStart'],
+    back: ['PadB'], // leaves menus; B is also the tongue, so it never pauses or quits mid-level
+    confirm: ['Enter', 'Space', 'TouchConfirm', 'PadA'],
     mute: ['KeyM'],
     restart: ['KeyR'],
     quit: ['KeyQ'],
     dev: ['Backquote'],
-    menuUp: ['ArrowUp', 'KeyW'],
-    menuDown: ['ArrowDown', 'KeyS'],
+    menuUp: ['ArrowUp', 'KeyW', 'PadUp', 'StickUp'],
+    menuDown: ['ArrowDown', 'KeyS', 'PadDown', 'StickDown'],
   };
   const keysDown = new Set();
   const keysHit = new Set();
@@ -133,6 +135,7 @@
     if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space'].includes(e.code)) e.preventDefault();
     if (!keysDown.has(e.code)) keysHit.add(e.code);
     keysDown.add(e.code);
+    setPadMode(false);
     audio.unlock();
   });
   window.addEventListener('keyup', (e) => keysDown.delete(e.code));
@@ -148,6 +151,41 @@
       ambience.hush();
     }
   });
+
+  // Gamepads (standard mapping, so Xbox-style names: A jump, X/B/RB/RT tongue, Start pause).
+  // They're polled once a frame and pressed or released like keys.
+  const PAD_BUTTONS = { 0: 'PadA', 1: 'PadB', 2: 'PadX', 5: 'PadRB', 7: 'PadRT', 9: 'PadStart', 12: 'PadUp', 13: 'PadDown', 14: 'PadLeft', 15: 'PadRight' };
+  const STICK_PRESS = 0.5, STICK_RELEASE = 0.35; // a gap between the two stops a resting stick flickering
+  let padHeld = new Set();
+  function setPadMode(on) {
+    if (padMode === on) return;
+    padMode = on;
+    document.body.classList.toggle('pad', on);
+  }
+  function pollGamepads() {
+    if (!navigator.getGamepads) return;
+    const now = new Set();
+    const stick = (code, v) => { if (v > (padHeld.has(code) ? STICK_RELEASE : STICK_PRESS)) now.add(code); };
+    for (const gp of navigator.getGamepads()) {
+      if (!gp || !gp.connected) continue;
+      gp.buttons.forEach((b, i) => { if (PAD_BUTTONS[i] && b.pressed) now.add(PAD_BUTTONS[i]); });
+      const [ax = 0, ay = 0] = gp.axes;
+      stick('StickLeft', -ax);
+      stick('StickRight', ax);
+      stick('StickUp', -ay);
+      stick('StickDown', ay);
+    }
+    for (const code of now) {
+      if (!padHeld.has(code)) {
+        keysHit.add(code);
+        setPadMode(true);
+        audio.unlock();
+      }
+      keysDown.add(code); // re-added each frame, since losing focus clears every held key
+    }
+    for (const code of padHeld) if (!now.has(code)) keysDown.delete(code);
+    padHeld = now;
+  }
 
   // On-screen buttons press virtual keys. A finger can slide between buttons in the same
   // cluster (e.g. from ◀ to ▶) without lifting.
@@ -175,6 +213,7 @@
     btn.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       enableTouchMode();
+      setPadMode(false);
       audio.unlock();
       setFinger(e.pointerId, btn.dataset.key);
     });
@@ -192,6 +231,7 @@
   // Taps and clicks on the game itself: choose menu items, or continue from a prompt.
   canvas.addEventListener('pointerdown', (e) => {
     if (e.pointerType === 'touch') enableTouchMode();
+    setPadMode(false);
     audio.unlock();
     const rect = canvas.getBoundingClientRect();
     const gx = (e.clientX - rect.left) / rect.width * W;
@@ -659,11 +699,357 @@
   };
 
   // ---------------------------------------------------------------------------
+  // Music: a small step sequencer that plays the songs in music.js. Notes are scheduled
+  // a little ahead on the audio clock, and everything runs through the master, so the
+  // underwater muffle and mute apply.
+  // ---------------------------------------------------------------------------
+  const MUSIC_VOLUME = 0.3; // under the sound effects, which carry the gameplay
+  const LOOKAHEAD = 0.12; // seconds of notes scheduled ahead of the audio clock
+
+  // Instruments: one or more oscillators (ratio to the note's pitch), an envelope
+  // (attack, decay, sustain level, release) and an optional low-pass filter.
+  const INSTRUMENTS = {
+    lead: { oscs: [{ type: 'square', gain: 0.5 }, { type: 'triangle', gain: 0.6 }], a: 0.01, d: 0.12, s: 0.6, r: 0.08, vol: 0.14, cutoff: 2400, vibrato: 0.004 },
+    pluck: { oscs: [{ type: 'triangle' }, { type: 'sine', ratio: 2, gain: 0.3 }], a: 0.004, d: 0.22, s: 0, r: 0.05, vol: 0.3, cutoff: 3200 },
+    reed: { oscs: [{ type: 'square' }], a: 0.03, d: 0.1, s: 0.7, r: 0.07, vol: 0.11, cutoff: 1300, vibrato: 0.005 },
+    harmonica: { oscs: [{ type: 'sawtooth' }, { type: 'square', gain: 0.4 }], a: 0.05, d: 0.2, s: 0.6, r: 0.12, vol: 0.08, cutoff: 1500, vibrato: 0.008 },
+    brass: { oscs: [{ type: 'sawtooth' }, { type: 'sawtooth', detune: 8 }], a: 0.025, d: 0.15, s: 0.6, r: 0.08, vol: 0.08, cutoff: 1900 },
+    flute: { oscs: [{ type: 'sine' }, { type: 'triangle', gain: 0.25 }], a: 0.09, d: 0.2, s: 0.8, r: 0.25, vol: 0.16, vibrato: 0.006 },
+    bell: { oscs: [{ type: 'sine' }, { type: 'sine', ratio: 3.01, gain: 0.25 }], a: 0.003, d: 1.4, s: 0, r: 0.3, vol: 0.2 },
+    musicbox: { oscs: [{ type: 'sine' }, { type: 'sine', ratio: 4, gain: 0.3 }, { type: 'triangle', ratio: 2, gain: 0.15 }], a: 0.002, d: 0.9, s: 0, r: 0.2, vol: 0.2 },
+    glass: { oscs: [{ type: 'sine' }, { type: 'sine', ratio: 2, gain: 0.15 }], a: 0.006, d: 0.7, s: 0, r: 0.2, vol: 0.1 },
+    bass: { oscs: [{ type: 'triangle' }, { type: 'square', gain: 0.25 }], a: 0.005, d: 0.2, s: 0.6, r: 0.05, vol: 0.32, cutoff: 700 },
+    softbass: { oscs: [{ type: 'sine' }, { type: 'triangle', gain: 0.3 }], a: 0.02, d: 0.3, s: 0.7, r: 0.15, vol: 0.32 },
+    pad: { oscs: [{ type: 'sawtooth' }, { type: 'sawtooth', detune: -9 }, { type: 'sawtooth', detune: 9 }], a: 0.5, d: 0.5, s: 0.8, r: 0.7, vol: 0.014, cutoff: 950 },
+  };
+
+  const NOTE_STEPS = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+  const CHORD_SHAPES = {
+    '': [0, 4, 7], m: [0, 3, 7], 7: [0, 4, 7, 10], maj7: [0, 4, 7, 11], m7: [0, 3, 7, 10],
+    sus4: [0, 5, 7], sus2: [0, 2, 7], dim: [0, 3, 6], 6: [0, 4, 7, 9], add9: [0, 4, 7, 14],
+  };
+  const accidental = (a) => (a === '#' ? 1 : a === 'b' ? -1 : 0);
+  function noteMidi(name) {
+    const m = /^([A-G])([#b]?)(\d)$/.exec(name);
+    if (!m) throw new Error(`Bad note "${name}"`);
+    return 12 * (+m[3] + 1) + NOTE_STEPS[m[1]] + accidental(m[2]);
+  }
+  function parseChord(sym) {
+    const m = /^([A-G])([#b]?)(.*)$/.exec(sym);
+    if (!m || !CHORD_SHAPES[m[3]]) throw new Error(`Bad chord "${sym}"`);
+    return { root: (NOTE_STEPS[m[1]] + accidental(m[2]) + 12) % 12, shape: CHORD_SHAPES[m[3]] };
+  }
+  const midiFreq = (m) => 440 * Math.pow(2, (m - 69) / 12);
+  const tokens = (str) => str.split(/\s+/).filter((t) => t && t !== '|');
+  // A pattern is one bar, or a list of bars used in turn.
+  const bars = (p) => [].concat(p).map(tokens);
+  // How many steps a note lasts: itself plus any '-' holding it.
+  function heldSteps(list, i) {
+    let n = 1;
+    while (list[i + n] === '-') n++;
+    return n;
+  }
+  // Wraps a pitch class into the octave starting at `low`.
+  const placeAbove = (pc, low) => low + ((pc - low) % 12 + 12) % 12;
+
+  // Turns a song from music.js into per-step chords and token lists.
+  function compileSong(def) {
+    const chordAt = [];
+    const chordStart = []; // true where a new chord begins
+    for (const bar of def.chords) {
+      const cs = bar.split(/\s+/).map(parseChord);
+      for (let s = 0; s < def.steps; s++) {
+        const k = Math.floor(s * cs.length / def.steps);
+        chordAt.push(cs[k]);
+        chordStart.push(s === 0 || Math.floor((s - 1) * cs.length / def.steps) !== k);
+      }
+    }
+    const parts = Object.values(def.parts).map((p) => ({
+      ...p,
+      notes: p.notes ? tokens(p.notes) : null,
+      bass: p.bass ? bars(p.bass) : null,
+      arp: p.arp ? bars(p.arp) : null,
+      stab: p.stab ? bars(p.stab) : null,
+      drums: p.drums ? Object.entries(p.drums).map(([kind, pat]) => ({ kind, bars: bars(pat) })) : null,
+    }));
+    return { ...def, parts, chordAt, chordStart, length: chordAt.length };
+  }
+  let songs = null; // compiled on first use, so a mistake in music.js only breaks the music
+
+  const BASS_DEGREES = { R: 0, 8: 12, L: -5 };
+  function bassNote(token, chord) {
+    let off = BASS_DEGREES[token];
+    if (token === '3') off = chord.shape[1];
+    if (token === '5') off = chord.shape[2];
+    if (token === '7') off = chord.shape[3] !== undefined ? chord.shape[3] : 10;
+    return off === undefined ? null : placeAbove(chord.root, 36) + off;
+  }
+  // Chord tones from the root upward, for arpeggios; 1 is the root, past the top it climbs an octave.
+  function arpNote(n, chord, low) {
+    const k = n - 1, len = chord.shape.length;
+    return placeAbove(chord.root, low) + chord.shape[k % len] + 12 * Math.floor(k / len);
+  }
+  // A close voicing for pads and stabs, every note within one octave from `low`.
+  const voicing = (chord, low = 55) => chord.shape.map((iv) => placeAbove(chord.root + iv, low));
+
+  const music = {
+    out: null,
+    noise: null,
+    current: null, // { name, song, bus, mix, step, next, loop }
+    intensity: 0, // the heron fight builds this up
+    init() {
+      if (this.out) return true;
+      if (!audio.ctx || !window.SONGS) return false;
+      const c = audio.ctx;
+      this.out = c.createGain();
+      this.out.gain.value = 0;
+      this.out.connect(audio.master);
+      this.noise = c.createBuffer(1, c.sampleRate, c.sampleRate);
+      const d = this.noise.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      return true;
+    },
+    // Each song plays into its own bus (plus echo), mixed into a gain that fades it out
+    // when the next song starts.
+    makeBus(song) {
+      const c = audio.ctx;
+      const bus = c.createGain();
+      bus.gain.value = song.volume || 1;
+      const mix = c.createGain();
+      bus.connect(mix);
+      mix.connect(this.out);
+      if (song.echo) {
+        const delay = c.createDelay(2);
+        delay.delayTime.value = song.echo.time;
+        const feedback = c.createGain();
+        feedback.gain.value = song.echo.feedback;
+        const tone = c.createBiquadFilter(); // each repeat a little darker
+        tone.type = 'lowpass';
+        tone.frequency.value = 2500;
+        const wet = c.createGain();
+        wet.gain.value = song.echo.mix;
+        bus.connect(delay);
+        delay.connect(tone);
+        tone.connect(feedback);
+        feedback.connect(delay);
+        tone.connect(wet);
+        wet.connect(mix);
+      }
+      return { bus, mix };
+    },
+    note(inst, midi, t, dur, vol, dest) {
+      const c = audio.ctx;
+      const freq = midiFreq(midi);
+      const env = c.createGain();
+      const peak = inst.vol * vol;
+      const end = t + Math.max(dur, inst.a + 0.01);
+      env.gain.setValueAtTime(0.0001, t);
+      env.gain.exponentialRampToValueAtTime(peak, t + inst.a);
+      if (inst.s > 0) {
+        env.gain.setTargetAtTime(peak * inst.s, t + inst.a, inst.d / 3);
+        env.gain.setTargetAtTime(0.0001, end, inst.r / 3);
+      } else {
+        env.gain.setTargetAtTime(0.0001, t + inst.a, inst.d / 3);
+      }
+      const stop = (inst.s > 0 ? end + inst.r : t + inst.a + inst.d) + 0.1;
+      let input = env;
+      if (inst.cutoff) {
+        const filter = c.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.value = inst.cutoff;
+        filter.connect(env);
+        input = filter;
+      }
+      let vib = null;
+      if (inst.vibrato) {
+        // Vibrato fades in on held notes, like a player leaning into them.
+        vib = c.createOscillator();
+        vib.frequency.value = 5.2;
+        const depth = c.createGain();
+        depth.gain.setValueAtTime(0, t);
+        depth.gain.linearRampToValueAtTime(freq * inst.vibrato, t + Math.min(0.4, dur));
+        vib.connect(depth);
+        vib.depth = depth;
+        vib.start(t);
+        vib.stop(stop);
+      }
+      for (const o of inst.oscs) {
+        const osc = c.createOscillator();
+        osc.type = o.type;
+        osc.frequency.value = freq * (o.ratio || 1);
+        if (o.detune) osc.detune.value = o.detune;
+        if (vib) vib.depth.connect(osc.frequency);
+        const g = c.createGain();
+        g.gain.value = o.gain === undefined ? 1 : o.gain;
+        osc.connect(g);
+        g.connect(input);
+        osc.start(t);
+        osc.stop(stop);
+      }
+      env.connect(dest);
+    },
+    drum(kind, t, vol, dest) {
+      const c = audio.ctx;
+      const hit = (osc, f0, f1, len, v) => {
+        const o = c.createOscillator();
+        o.type = osc;
+        o.frequency.setValueAtTime(f0, t);
+        o.frequency.exponentialRampToValueAtTime(f1, t + len);
+        const g = c.createGain();
+        g.gain.setValueAtTime(v * vol, t);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + len);
+        o.connect(g);
+        g.connect(dest);
+        o.start(t);
+        o.stop(t + len + 0.02);
+      };
+      const hiss = (type, freq, q, len, v) => {
+        const src = c.createBufferSource();
+        src.buffer = this.noise;
+        const f = c.createBiquadFilter();
+        f.type = type;
+        f.frequency.value = freq;
+        f.Q.value = q;
+        const g = c.createGain();
+        g.gain.setValueAtTime(v * vol, t);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + len);
+        src.connect(f);
+        f.connect(g);
+        g.connect(dest);
+        src.start(t, Math.random() * 0.5);
+        src.stop(t + len + 0.02);
+      };
+      switch (kind) {
+        case 'kick': hit('sine', 140, 45, 0.16, 0.55); break;
+        case 'snare': hiss('bandpass', 1900, 0.8, 0.12, 0.3); hit('triangle', 200, 140, 0.06, 0.15); break;
+        case 'hat': hiss('highpass', 7500, 0.7, 0.035, 0.12); break;
+        case 'shaker': hiss('bandpass', 5500, 1.2, 0.06, 0.08); break;
+        case 'wood': hit('sine', 1150, 1050, 0.05, 0.22); hit('triangle', 2300, 2100, 0.025, 0.06); break;
+        case 'tom': hit('sine', 210, 110, 0.22, 0.4); break;
+      }
+    },
+    // Plays one step of the song at audio time t.
+    playStep(cur, t, stepDur) {
+      const song = cur.song;
+      const i = cur.step % song.length;
+      const s = i % song.steps;
+      const barIndex = Math.floor(i / song.steps);
+      const chord = song.chordAt[i];
+      for (const p of song.parts) {
+        if (p.from && this.intensity < p.from) continue;
+        if (p.loops && !p.loops[cur.loop % p.loops.length]) continue;
+        const vol = p.vol === undefined ? 1 : p.vol;
+        const inst = INSTRUMENTS[p.inst];
+        if (p.notes) {
+          const tok = p.notes[i];
+          if (tok !== '-' && tok !== '.') this.note(inst, noteMidi(tok), t, heldSteps(p.notes, i) * stepDur, vol, cur.bus);
+        }
+        if (p.pad && song.chordStart[i]) {
+          let n = 1;
+          while (i + n < song.length && !song.chordStart[i + n]) n++;
+          for (const m of voicing(chord)) this.note(inst, m, t, n * stepDur, vol, cur.bus);
+        }
+        for (const [key, play] of [['bass', (tok) => bassNote(tok, chord)], ['arp', (tok) => (/^\d+$/.test(tok) ? arpNote(+tok, chord, 60) : null)]]) {
+          if (!p[key]) continue;
+          const bar = p[key][barIndex % p[key].length];
+          const m = play(bar[s]);
+          if (m !== null) this.note(inst, m, t, heldSteps(bar, s) * stepDur, vol, cur.bus);
+        }
+        if (p.stab) {
+          const bar = p.stab[barIndex % p.stab.length];
+          if (bar[s] === 'x') for (const m of voicing(chord, 60)) this.note(inst, m, t, stepDur, vol, cur.bus);
+        }
+        if (p.drums) {
+          for (const d of p.drums) {
+            const tok = d.bars[barIndex % d.bars.length][s];
+            if (tok === 'x' || tok === 'o') this.drum(d.kind, t, (tok === 'x' ? 1 : 0.45) * vol, cur.bus);
+          }
+        }
+      }
+    },
+    // Which song fits what's happening, or null for silence.
+    wanted() {
+      if (audio.muted || !musicOn) return null;
+      switch (state) {
+        case 'title': case 'select': case 'victory': return 'title';
+        case 'dev': return devSong || 'title';
+        case 'playing': case 'paused': case 'dying':
+          if (level.boss && level.boss.defeated) return 'title'; // the heron's gone: the theme comes home
+          return inTutorial ? 'meadow' : level.themeName;
+        default: return null; // the level-complete fanfare and game over play on their own
+      }
+    },
+    start(name) {
+      const song = songs[name];
+      if (!song) { this.current = null; return; }
+      this.current = { name, song, ...this.makeBus(song), step: 0, loop: 0, next: audio.ctx.currentTime + 0.1 };
+    },
+    stop() {
+      const cur = this.current;
+      if (!cur) return;
+      cur.mix.gain.setTargetAtTime(0, audio.ctx.currentTime, 0.25);
+      setTimeout(() => cur.mix.disconnect(), 3000);
+      this.current = null;
+    },
+    compile() {
+      if (songs) return true;
+      try {
+        songs = {};
+        for (const [name, def] of Object.entries(window.SONGS)) songs[name] = compileSong(def);
+        return true;
+      } catch (err) {
+        console.error('Music disabled:', err);
+        window.SONGS = null;
+        return false;
+      }
+    },
+    // Schedules the current song's steps up to audio time `until`.
+    schedule(until) {
+      const cur = this.current;
+      while (cur.next < until) {
+        const song = cur.song;
+        const bpm = song.bpm + (song.bpmPerHit || 0) * Math.max(0, this.intensity - 1);
+        const stepDur = 60 / bpm / song.beat;
+        // Swing pushes every other step a little late.
+        const swing = song.swing || 0;
+        const offset = cur.step % 2 === 1 ? swing * stepDur / 3 : 0;
+        this.playStep(cur, cur.next + offset, stepDur);
+        cur.next += stepDur;
+        cur.step++;
+        if (cur.step % song.length === 0) cur.loop++;
+      }
+    },
+    update() {
+      if (!this.init() || !this.compile()) return;
+      const want = this.wanted();
+      if ((this.current && this.current.name) !== want) {
+        this.stop();
+        if (want) this.start(want);
+      }
+      // Fight intensity: a low pulse during the heron's intro, then a layer per stage of the fight.
+      // The dev jukebox builds it up a step each time round instead.
+      const b = level && level.boss;
+      if (state === 'dev') this.intensity = this.current ? Math.min(4, this.current.loop) : 0;
+      else this.intensity = b && !b.defeated ? (b.state === 'intro' ? 0 : 1 + b.maxHp - b.hp) : 0;
+      // Quieter while paused or dying.
+      const duck = state === 'paused' ? 0.35 : state === 'dying' ? 0.6 : 1;
+      this.out.gain.setTargetAtTime(MUSIC_VOLUME * duck, audio.ctx.currentTime, 0.15);
+
+      const cur = this.current;
+      if (!cur) return;
+      const now = audio.ctx.currentTime;
+      if (cur.next < now - 0.2) cur.next = now + 0.05; // the tab was asleep: pick up from here
+      this.schedule(now + LOOKAHEAD);
+    },
+  };
+
+  // ---------------------------------------------------------------------------
   // Storage (best-effort; works without it)
   // ---------------------------------------------------------------------------
   const BEST_KEY = 'lilyleap.best';
   const TUTORIAL_KEY = 'lilyleap.tutorialDone';
   const COMPLETED_KEY = 'lilyleap.completed'; // beating the game unlocks the level select
+  const MUSIC_OFF_KEY = 'lilyleap.musicOff';
   function loadNumber(key) {
     try { return parseInt(localStorage.getItem(key) || '0', 10) || 0; } catch (err) { return 0; }
   }
@@ -676,6 +1062,23 @@
   }
   function saveLilies(set) {
     try { localStorage.setItem(LILY_KEY, JSON.stringify([...set])); } catch (err) { /* ignore */ }
+  }
+  // The run in progress, so Continue can pick it up: which level, the score and lives going
+  // into it, and the last checkpoint touched.
+  const RUN_KEY = 'lilyleap.run';
+  function loadRun() {
+    try {
+      const run = JSON.parse(localStorage.getItem(RUN_KEY) || 'null');
+      // Levels are found by name, so a save survives levels being added or reordered.
+      const i = run ? window.LEVELS.findIndex((l) => l.name === run.name) : -1;
+      return i < 0 ? null : { ...run, level: i };
+    } catch (err) { return null; }
+  }
+  function writeRun(run) {
+    try {
+      if (run) localStorage.setItem(RUN_KEY, JSON.stringify(run));
+      else localStorage.removeItem(RUN_KEY);
+    } catch (err) { /* ignore */ }
   }
 
   // ---------------------------------------------------------------------------
@@ -713,11 +1116,18 @@
   let highScore = loadNumber(BEST_KEY);
   let tutorialDone = loadNumber(TUTORIAL_KEY) > 0;
   let gameCompleted = loadNumber(COMPLETED_KEY) > 0;
+  let musicOn = loadNumber(MUSIC_OFF_KEY) === 0;
   let justUnlocked = false; // shows a note on the victory screen the first time
   let foundLilies = loadLilies(); // names of levels whose golden lily has been found
+  let savedRun = loadRun(); // the run Continue resumes, or null
   let inTutorial = false;
   let touchMode = false; // set once the player touches the screen; swaps key hints for tap hints
-  let menuIndex = tutorialDone ? 0 : 1; // first-time players start with the tutorial highlighted
+  let padMode = false; // set while a gamepad is the last thing used; swaps hints for button names
+  // Picks the hint that matches the controls in use.
+  const hint = (keys, touch, pad) => (padMode ? pad : touchMode ? touch : keys);
+  // Continue if there's a run to resume; first-time players start with the tutorial highlighted.
+  const titleDefault = () => (savedRun || tutorialDone ? 0 : 1);
+  let menuIndex = titleDefault();
   let stateTimer = 0;
   let banner = 0;
   let shake = 0;
@@ -725,16 +1135,30 @@
   let particles = [];
   let popups = [];
 
-  const titleItems = () => (gameCompleted ? ['Start game', 'Tutorial', 'Level select'] : ['Start game', 'Tutorial']);
+  function titleMenu() {
+    const items = [];
+    if (savedRun) items.push({ label: `Continue · Level ${savedRun.level + 1}`, go: continueRun });
+    items.push({ label: 'Start game', go: startGame }, { label: 'Tutorial', go: startTutorial });
+    if (gameCompleted) items.push({ label: 'Level select', go: () => { state = 'select'; menuIndex = 1; sfx.select(); } });
+    return items;
+  }
+  const titleItems = () => titleMenu().map((item) => item.label);
   // Level select: the tutorial, then every level.
   const selectItems = () => [`Tutorial: ${window.TUTORIAL.name}`, ...window.LEVELS.map((l, i) => `${i + 1}. ${l.name}`)];
-  const pauseItems = () => ['Resume', 'Restart level', `Sound: ${audio.muted ? 'Off' : 'On'}`, 'Quit to title'];
+  const pauseItems = () => ['Resume', 'Restart level', `Sound: ${audio.muted ? 'Off' : 'On'}`, `Music: ${musicOn ? 'On' : 'Off'}`, 'Quit to title'];
 
   // Dev mode: jump straight to any level. Dev runs never save a best score.
   let devRun = false;
   let devInvincible = false;
   const CAMEO_MODES = ['Random', 'Always', 'Never'];
   let devCameo = 'Random';
+  let devSong = null; // the jukebox: a song to play on the dev screen
+  function devSongLabel() {
+    if (!devSong) return 'Off';
+    if (devSong === 'title') return 'Title';
+    const lvl = window.LEVELS.find((l) => l.theme === devSong);
+    return lvl ? lvl.name : devSong;
+  }
   const DEV_LEVEL_COUNT = () => window.LEVELS.length + 1; // tutorial + levels
   function devItems() {
     return [
@@ -742,6 +1166,7 @@
       ...window.LEVELS.map((l, i) => `Level ${i + 1}: ${l.name}`),
       `Invincible: ${devInvincible ? 'ON' : 'OFF'}`,
       `Snail cameo: ${devCameo}`,
+      `Jukebox: ${devSongLabel()}`,
     ];
   }
 
@@ -1274,6 +1699,55 @@
     levelIndex = i;
     inTutorial = false;
     enterLevel(window.LEVELS[i]);
+    saveRun();
+  }
+
+  // Remembers where the run is, so closing the game doesn't lose it. Dev runs and the
+  // tutorial leave the saved run alone.
+  function saveRun() {
+    if (devRun || inTutorial) return;
+    savedRun = {
+      level: levelIndex,
+      name: level.name,
+      score: levelStartScore, // flies before the checkpoint come back, so their points do too
+      lives,
+      checkpoint: level.checkpoints.findIndex((c) => c.active),
+      time: level.time,
+    };
+    writeRun(savedRun);
+  }
+  // Saves the run as about to start level i (after a level's tally), or ends it past the last level.
+  function setRunAt(i) {
+    if (i >= window.LEVELS.length) { endRun(); return; }
+    if (devRun) return;
+    savedRun = { level: i, name: window.LEVELS[i].name, score, lives, checkpoint: -1, time: 0 };
+    writeRun(savedRun);
+  }
+  function endRun() {
+    if (devRun) return;
+    savedRun = null;
+    writeRun(null);
+  }
+
+  const checkpointSpawn = (c, p) => ({ x: c.x - 4, y: c.y + c.h - p.h });
+
+  function continueRun() {
+    const run = savedRun;
+    score = run.score;
+    lives = run.lives;
+    levelIndex = run.level;
+    inTutorial = false;
+    enterLevel(window.LEVELS[run.level]);
+    const c = level.checkpoints[run.checkpoint];
+    if (c) {
+      c.active = true;
+      const spawn = checkpointSpawn(c, player);
+      player = makePlayer(spawn.x, spawn.y);
+      snapCamera();
+    }
+    level.time = run.time || 0;
+    saveRun();
+    sfx.croak();
   }
 
   function startGame() {
@@ -1300,7 +1774,7 @@
   function goToTitle() {
     justUnlocked = false;
     state = 'title';
-    menuIndex = tutorialDone ? 0 : 1;
+    menuIndex = titleDefault();
   }
 
   function quitToTitle() {
@@ -1480,16 +1954,14 @@
           sfx.select();
         } else if (tapped('confirm')) {
           devRun = false;
-          if (menuIndex === 0) startGame();
-          else if (menuIndex === 1) startTutorial();
-          else { state = 'select'; menuIndex = 1; sfx.select(); }
+          titleMenu()[menuIndex].go();
         }
         break;
 
       case 'select': {
         cam.x = (time * 60) % 2000;
         menuNav(selectItems().length);
-        if (tapped('pause')) {
+        if (tapped('pause') || tapped('back')) {
           sfx.select();
           goToTitle();
         } else if (tapped('confirm')) {
@@ -1520,6 +1992,10 @@
           } else if (menuIndex === DEV_LEVEL_COUNT() + 1) {
             devCameo = CAMEO_MODES[(CAMEO_MODES.indexOf(devCameo) + 1) % CAMEO_MODES.length];
             sfx.select();
+          } else if (menuIndex === DEV_LEVEL_COUNT() + 2) {
+            const names = [null, ...Object.keys(window.SONGS || {})];
+            devSong = names[(names.indexOf(devSong) + 1) % names.length];
+            sfx.select();
           } else {
             devRun = true; // set first so the level's cameo roll uses the dev setting
             if (menuIndex === 0) startTutorial();
@@ -1542,7 +2018,7 @@
 
       case 'paused':
         menuNav(pauseItems().length);
-        if (tapped('pause')) {
+        if (tapped('pause') || tapped('back')) {
           state = 'playing';
           sfx.select();
         } else if (tapped('quit')) {
@@ -1553,6 +2029,7 @@
           if (menuIndex === 0) { state = 'playing'; sfx.select(); }
           else if (menuIndex === 1) restartLevel();
           else if (menuIndex === 2) { audio.muted = !audio.muted; sfx.select(); }
+          else if (menuIndex === 3) { musicOn = !musicOn; saveNumber(MUSIC_OFF_KEY, musicOn ? 0 : 1); sfx.select(); }
           else quitToTitle();
         }
         break;
@@ -1614,6 +2091,7 @@
 
     ambient.update(dt);
     ambience.update(dt);
+    music.update();
     // Muffle all sound while the frog's head is underwater (only during play, so menus stay clear).
     const playingNow = state === 'playing' || state === 'dying';
     audio.setMuffled(playingNow && !!player && headUnderwater(player, audio.muffled ? -3 : 3));
@@ -2547,7 +3025,8 @@
         level.checkpoints.forEach((o) => { o.active = false; });
         c.active = true;
         c.wave = 1;
-        p.spawn = { x: c.x - 4, y: c.y + c.h - p.h };
+        p.spawn = checkpointSpawn(c, p);
+        saveRun();
         sfx.checkpoint();
         popup(c.x + 8, c.y - 8, 'Checkpoint!', '#b9f6ca');
         burst(c.x + 8, c.y + 4, 12, '#b9f6ca', { grav: 200, speed: 150 });
@@ -2585,6 +3064,9 @@
   function killPlayer(fell) {
     if (state !== 'playing') return;
     if (!inTutorial && !(devRun && devInvincible)) lives--;
+    // Saved straight away so quitting mid-fall can't undo a lost life. Game over ends the run.
+    if (lives > 0) saveRun();
+    else if (!inTutorial) endRun();
     state = 'dying';
     stateTimer = fell ? 1.0 : 1.6;
     sfx.die();
@@ -2617,6 +3099,7 @@
     const allFlies = level.fliesEaten === level.flyTotal ? 500 : 0;
     level.bonus = { time: bonusTime, hearts: bonusHearts, allFlies };
     score += bonusTime + bonusHearts + allFlies;
+    setRunAt(levelIndex + 1); // beating the last level ends the run
   }
 
   function updateParticles(dt) {
@@ -3489,8 +3972,8 @@
     ctx.font = `15px ${FONT}`;
     for (const sign of level.signs) {
       if (sign.show <= 0) continue;
-      // Text may be a { key, touch } pair so hints match the controls in use.
-      const txt = typeof sign.text === 'string' ? sign.text : touchMode ? sign.text.touch : sign.text.key;
+      // Text may be a { key, touch, pad } set so hints match the controls in use.
+      const txt = typeof sign.text === 'string' ? sign.text : hint(sign.text.key, sign.text.touch, sign.text.pad || sign.text.key);
       if (!sign.lines || sign.linesFor !== txt) {
         sign.lines = wrapText(txt, 280);
         sign.linesFor = txt;
@@ -4277,8 +4760,8 @@
     text(formatTime(level.time), W - 218, 33, 18, '#dff5e3', 'left');
 
     if (audio.muted) {
-      if (touchMode) text('🔇 muted', 24, 70, 13, '#fff', 'left', 'normal');
-      else text('🔇 muted (M)', W / 2, 30, 14, '#fff', 'center', 'normal');
+      if (touchMode && !padMode) text('🔇 muted', 24, 70, 13, '#fff', 'left', 'normal');
+      else text(padMode ? '🔇 muted' : '🔇 muted (M)', W / 2, 30, 14, '#fff', 'center', 'normal');
     }
     if (devRun) {
       const tag = devInvincible ? 'DEV · INVINCIBLE' : 'DEV';
@@ -4342,18 +4825,19 @@
 
   function drawOverlay() {
     if (state === 'paused') {
-      panel(420, 340);
-      text('Paused', W / 2, H / 2 - 120, 44, '#fff', 'center');
-      drawMenu(pauseItems(), H / 2 - 50);
-      text(touchMode ? 'Tap an option' : '↑ ↓ choose · Enter select · P resume', W / 2, H / 2 + 140, 14, '#b9d8c0', 'center', 'normal');
+      panel(420, 380);
+      text('Paused', W / 2, H / 2 - 135, 44, '#fff', 'center');
+      drawMenu(pauseItems(), H / 2 - 70, 260, 42);
+      text(hint('↑ ↓ choose · Enter select · P resume', 'Tap an option', '↑ ↓ choose · A select · B resume'), W / 2, H / 2 + 160, 14, '#b9d8c0', 'center', 'normal');
     } else if (state === 'complete' && inTutorial) {
       panel(480, 260);
       text('Tutorial Complete!', W / 2, H / 2 - 80, 38, '#ffe066', 'center');
       text("You're ready for the big pond, little frog.", W / 2, H / 2 - 28, 19, '#fff', 'center', 'normal');
       text(`Flies eaten: ${level.fliesEaten} / ${level.flyTotal}`, W / 2, H / 2 + 4, 19, '#fff', 'center', 'normal');
       if (stateTimer <= 0) {
-        blinkPrompt(touchMode ? 'Tap to start the adventure' : 'Press Enter to start the adventure', H / 2 + 60);
-        if (!touchMode) text('Esc: back to title', W / 2, H / 2 + 94, 14, '#b9d8c0', 'center', 'normal');
+        blinkPrompt(hint('Press Enter to start the adventure', 'Tap to start the adventure', 'Press A to start the adventure'), H / 2 + 60);
+        const back = hint('Esc: back to title', null, 'Start: back to title');
+        if (back) text(back, W / 2, H / 2 + 94, 14, '#b9d8c0', 'center', 'normal');
       }
     } else if (state === 'complete') {
       panel(460, 340);
@@ -4369,15 +4853,16 @@
       }
       if (b.allFlies) text(`All flies bonus!  +${b.allFlies}`, W / 2, H / 2 + 58, 20, '#b9f6ca', 'center');
       if (stateTimer <= 0) {
-        blinkPrompt(touchMode ? 'Tap to continue' : 'Press Enter to continue', H / 2 + 108);
-        if (!touchMode) text('Esc: quit to title', W / 2, H / 2 + 138, 13, '#b9d8c0', 'center', 'normal');
+        blinkPrompt(hint('Press Enter to continue', 'Tap to continue', 'Press A to continue'), H / 2 + 108);
+        const quit = hint('Esc: quit to title', null, 'Start: quit to title');
+        if (quit) text(quit, W / 2, H / 2 + 138, 13, '#b9d8c0', 'center', 'normal');
       }
     } else if (state === 'gameover') {
       panel(420, 240);
       text('Game Over', W / 2, H / 2 - 60, 44, '#ff8a80', 'center');
       text(`Score: ${score}`, W / 2, H / 2, 22, '#fff', 'center');
       text(`Best: ${highScore}`, W / 2, H / 2 + 32, 18, '#dff5e3', 'center', 'normal');
-      if (stateTimer <= 0) blinkPrompt(touchMode ? 'Tap to continue' : 'Press Enter', H / 2 + 80);
+      if (stateTimer <= 0) blinkPrompt(hint('Press Enter', 'Tap to continue', 'Press A'), H / 2 + 80);
     } else if (state === 'victory') {
       panel(540, 340);
       text('You saved the pond!', W / 2, H / 2 - 120, 38, '#ffe066', 'center');
@@ -4387,7 +4872,7 @@
       text(`Final score: ${score}`, W / 2, H / 2 + 46, 24, '#fff', 'center');
       text(`Best: ${highScore}`, W / 2, H / 2 + 78, 18, '#dff5e3', 'center', 'normal');
       if (justUnlocked) text('Level select unlocked on the title screen!', W / 2, H / 2 + 104, 16, '#b9f6ca', 'center');
-      if (stateTimer <= 0) blinkPrompt(touchMode ? 'Tap to continue' : 'Press Enter', H / 2 + (justUnlocked ? 138 : 128));
+      if (stateTimer <= 0) blinkPrompt(hint('Press Enter', 'Tap to continue', 'Press A'), H / 2 + (justUnlocked ? 138 : 128));
     }
   }
 
@@ -4413,7 +4898,7 @@
     });
     const lilies = lilyTotals();
     text(`Golden lilies found: ${lilies.found}/${lilies.total}`, W / 2, top + 84 + items.length * gap - 4, 15, '#f2e3a0', 'center', 'normal');
-    text(touchMode ? 'Tap a level' : '↑ ↓ choose · Enter play · Esc back', W / 2, top + 84 + items.length * gap + 20, 14, '#b9d8c0', 'center', 'normal');
+    text(hint('↑ ↓ choose · Enter play · Esc back', 'Tap a level', '↑ ↓ choose · A play · B back'), W / 2, top + 84 + items.length * gap + 20, 14, '#b9d8c0', 'center', 'normal');
   }
 
   function drawDevScreen() {
@@ -4422,7 +4907,7 @@
     ctx.fillStyle = THEMES.meadow.grass;
     ctx.fillRect(0, H - 70, W, 8);
     const items = devItems();
-    const gap = 35;
+    const gap = 33;
     panel(520, 110 + items.length * gap);
     const top = H / 2 - (110 + items.length * gap) / 2;
     text('Dev Mode', W / 2, top + 36, 32, '#ffe066', 'center');
@@ -4465,17 +4950,22 @@
     ctx.beginPath();
     ctx.roundRect(W / 2 - 330, 200, 660, 86, 16);
     ctx.fill();
-    const lines = touchMode ? [
-      ['Move', '◀ ▶'],
-      ['Jump / Swim', 'Jump'],
-      ['Tongue / Hooks', 'Tongue (hold)'],
-      ['Drop through plank', '▼ + Jump'],
-    ] : [
+    const lines = hint([
       ['Move', '← → / A D'],
       ['Jump / Swim', 'Space · Z · ↑ · W'],
       ['Tongue / Hooks', 'X · J · Shift (hold)'],
       ['Drop through plank', '↓ + Jump'],
-    ];
+    ], [
+      ['Move', '◀ ▶'],
+      ['Jump / Swim', 'Jump'],
+      ['Tongue / Hooks', 'Tongue (hold)'],
+      ['Drop through plank', '▼ + Jump'],
+    ], [
+      ['Move', 'D-pad / left stick'],
+      ['Jump / Swim', 'A'],
+      ['Tongue / Hooks', 'X · B · RB (hold)'],
+      ['Drop through plank', '↓ + A'],
+    ]);
     lines.forEach(([k, v], i) => {
       const col = i % 2, rowI = Math.floor(i / 2);
       const x = W / 2 - 310 + col * 330;
@@ -4484,15 +4974,19 @@
       text(v, x + 175, y, 17, '#ffffff', 'left', 'normal');
     });
     const items = titleItems();
-    const three = items.length > 2;
-    text('Stomp or eat bugs · collect flies · reach the lotus flag', W / 2, three ? 304 : 312, 16, '#20452d', 'center', 'normal');
+    // More menu items (Continue, Level select) pack the menu tighter so it still fits above the ground.
+    const lay = [
+      { tag: 312, box: 340, boxH: 100, first: 368, gap: 44, hint: 455 },
+      { tag: 304, box: 322, boxH: 124, first: 346, gap: 38, hint: 460 },
+      { tag: 298, box: 310, boxH: 144, first: 332, gap: 33, hint: 466 },
+    ][Math.min(items.length, 4) - 2];
+    text('Stomp or eat bugs · collect flies · reach the lotus flag', W / 2, lay.tag, 16, '#20452d', 'center', 'normal');
     ctx.fillStyle = 'rgba(20, 50, 35, 0.55)';
     ctx.beginPath();
-    ctx.roundRect(W / 2 - 150, three ? 322 : 340, 300, three ? 124 : 100, 16);
+    ctx.roundRect(W / 2 - 160, lay.box, 320, lay.boxH, 16);
     ctx.fill();
-    if (three) drawMenu(items, 346, 260, 38);
-    else drawMenu(items, 368);
-    text(touchMode ? 'Tap an option' : '↑ ↓ choose · Enter select', W / 2, three ? 460 : 455, 14, '#20452d', 'center', 'normal');
+    drawMenu(items, lay.first, 280, lay.gap);
+    text(hint('↑ ↓ choose · Enter select', 'Tap an option', '↑ ↓ choose · A select'), W / 2, lay.hint, 14, '#20452d', 'center', 'normal');
     if (highScore > 0) text(`Best: ${highScore}`, W - 20, 24, 16, '#20452d', 'right');
     const lilies = lilyTotals();
     if (lilies.found > 0) {
@@ -4501,7 +4995,9 @@
       drawGoldenLily(W - 34 - ctx.measureText(label).width, 50, 0.6, time);
       text(label, W - 20, 50, 14, '#20452d', 'right');
     }
-    if (!touchMode) {
+    if (padMode) {
+      text('Start: pause', 20, 24, 14, '#20452d', 'left', 'normal');
+    } else if (!touchMode) {
       text('M: sound  ·  P: pause', 20, 24, 14, '#20452d', 'left', 'normal');
       text('` dev mode', W - 16, H - 18, 13, '#e8d5b5', 'right', 'normal');
     }
@@ -4518,6 +5014,7 @@
   function frame(now) {
     acc += Math.min(0.1, (now - last) / 1000);
     last = now;
+    pollGamepads();
     while (acc >= STEP) {
       update(STEP);
       keysHit.clear();
@@ -4533,6 +5030,7 @@
     get state() { return state; },
     get player() { return player; },
     get level() { return level; },
+    get song() { return music.current && { name: music.current.name, loop: music.current.loop, intensity: music.intensity }; },
     loadLevel: (i) => { startGame(); loadLevel(i); },
     cameoSpots: () => findCameoSpots(level).map((sp) => [sp.tx, sp.ty]),
     goalCameoSpot: () => goalCameoSpot(level),
@@ -4541,6 +5039,37 @@
     step: (n = 1) => {
       for (let i = 0; i < n; i++) { update(STEP); keysHit.clear(); }
       render();
+    },
+    // Renders a song (or a sound effect) offline and measures it, e.g. to balance volumes:
+    // await lilyLeap.measure('song', 'meadow', 20) or await lilyLeap.measure('sfx', 'jump').
+    measure: async (kind, name, seconds = 2, intensity = 0) => {
+      if (!music.compile()) return null;
+      const live = { ctx: audio.ctx, master: audio.master, out: music.out, current: music.current, intensity: music.intensity };
+      const off = new OfflineAudioContext(2, Math.ceil(44100 * seconds), 44100);
+      try {
+        audio.ctx = off;
+        audio.master = off.createGain();
+        audio.master.gain.value = 0.22;
+        audio.master.connect(off.destination);
+        if (kind === 'song') {
+          music.out = null;
+          music.init();
+          music.out.gain.value = MUSIC_VOLUME;
+          music.intensity = intensity;
+          music.start(name);
+          music.current.next = 0;
+          music.schedule(seconds);
+        } else {
+          sfx[name]();
+        }
+      } finally {
+        Object.assign(audio, { ctx: live.ctx, master: live.master });
+        Object.assign(music, { out: live.out, current: live.current, intensity: live.intensity });
+      }
+      const data = (await off.startRendering()).getChannelData(0);
+      let peak = 0, sum = 0;
+      for (const v of data) { peak = Math.max(peak, Math.abs(v)); sum += v * v; }
+      return { peak: +peak.toFixed(3), rms: +Math.sqrt(sum / data.length).toFixed(4) };
     },
   };
 })();
