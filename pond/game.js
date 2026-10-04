@@ -4,7 +4,12 @@
   // ---------------------------------------------------------------------------
   // Constants
   // ---------------------------------------------------------------------------
-  const W = 960, H = 540, T = 32;
+  // The view is always H tall (levels are built for it), and as wide as the screen's shape
+  // allows, from square (phones held upright) to ultrawide. See resize().
+  let W = 960, H = 540;
+  const T = 32;
+  const MIN_ASPECT = 1, MAX_ASPECT = 2.4;
+  const UI_W = 720; // the HUD and menus shrink to fit when the view is narrower than this
   const STEP = 1 / 60;
 
   const GRAVITY = 2000;
@@ -98,15 +103,45 @@
   // ---------------------------------------------------------------------------
   const canvas = document.getElementById('game');
   const ctx = canvas.getContext('2d');
+  const stage = document.getElementById('stage');
   let dpr = 1;
+  let ui = 1; // scale for the HUD and menus (see uiSpace)
+  let viewCap = Infinity; // a level narrower than the screen (the heron's arena) caps the view at its width
 
   function resize() {
     dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const cs = getComputedStyle(stage);
+    const aw = stage.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    const ah = stage.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    const aspect = aw > 0 && ah > 0 ? aw / ah : 16 / 9;
+    W = Math.round(Math.max(H * MIN_ASPECT, Math.min(H * aspect, H * MAX_ASPECT, viewCap)));
+    ui = Math.min(1, W / UI_W);
+    const scale = aw > 0 && ah > 0 ? Math.min(aw / W, ah / H) : 1;
+    canvas.style.width = `${W * scale}px`;
+    canvas.style.height = `${H * scale}px`;
     canvas.width = W * dpr;
     canvas.height = H * dpr;
   }
   window.addEventListener('resize', resize);
   resize();
+
+  // Draws HUD or menu art laid out for at least UI_W wide, scaled down to fit a narrower view.
+  // W and H read as the scaled-up size while it runs, so layouts keep using them as usual.
+  function uiSpace(draw) {
+    if (ui === 1) return draw();
+    const w = W, h = H;
+    ctx.save();
+    ctx.scale(ui, ui);
+    W = w / ui;
+    H = h / ui;
+    try {
+      draw();
+    } finally {
+      W = w;
+      H = h;
+      ctx.restore();
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // Input
@@ -161,6 +196,7 @@
     if (padMode === on) return;
     padMode = on;
     document.body.classList.toggle('pad', on);
+    resize(); // upright phones make room for the on-screen controls only while they're shown
   }
   function pollGamepads() {
     if (!navigator.getGamepads) return;
@@ -195,6 +231,7 @@
     if (touchMode) return;
     touchMode = true;
     document.body.classList.add('touch');
+    resize();
   }
   function setFinger(id, code) {
     const prev = fingers.get(id);
@@ -227,6 +264,12 @@
     if (btn && currentBtn && btn.parentElement === currentBtn.parentElement) setFinger(e.pointerId, btn.dataset.key);
   });
   ['pointerup', 'pointercancel'].forEach((type) => window.addEventListener(type, (e) => setFinger(e.pointerId, null)));
+
+  // iOS Safari still zooms on a quick double-tap (or a two-thumb pinch) despite touch-action,
+  // so cancel those gestures outright. Everything here runs on pointer events, so nothing
+  // relies on the clicks a touchend would otherwise produce.
+  document.addEventListener('touchend', (e) => e.preventDefault(), { passive: false });
+  document.addEventListener('gesturestart', (e) => e.preventDefault());
 
   // Taps and clicks on the game itself: choose menu items, or continue from a prompt.
   canvas.addEventListener('pointerdown', (e) => {
@@ -3154,19 +3197,25 @@
     ctx.imageSmoothingEnabled = true;
 
     const menuScreen = state === 'title' || state === 'dev' || state === 'select';
+    const cap = menuScreen ? Infinity : level.pw;
+    if (cap !== viewCap) {
+      viewCap = cap;
+      resize();
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
     const theme = menuScreen ? THEMES.meadow : level.theme;
     drawBackground(theme, cam.x, menuScreen ? 0 : cam.y);
 
     if (state === 'title') {
-      drawTitle();
+      uiSpace(drawTitle);
       return;
     }
     if (state === 'dev') {
-      drawDevScreen();
+      uiSpace(drawDevScreen);
       return;
     }
     if (state === 'select') {
-      drawSelectScreen();
+      uiSpace(drawSelectScreen);
       return;
     }
 
@@ -3207,8 +3256,10 @@
     drawSignBubbles();
     ctx.restore();
 
-    drawHud();
-    drawOverlay();
+    uiSpace(() => {
+      drawHud();
+      drawOverlay();
+    });
   }
 
   // --- Background -----------------------------------------------------------
@@ -4761,6 +4812,7 @@
 
     if (audio.muted) {
       if (touchMode && !padMode) text('🔇 muted', 24, 70, 13, '#fff', 'left', 'normal');
+      else if (W < 860) text(padMode ? '🔇 muted' : '🔇 muted (M)', 24, 70, 13, '#fff', 'left', 'normal');
       else text(padMode ? '🔇 muted' : '🔇 muted (M)', W / 2, 30, 14, '#fff', 'center', 'normal');
     }
     if (devRun) {
@@ -4806,7 +4858,11 @@
 
   let menuHitboxes = [];
   function drawMenu(items, y, width = 260, spacing = 44) {
-    menuHitboxes = items.map((_, i) => ({ x: W / 2 - width / 2, y: y + i * spacing - spacing / 2 + 2, w: width, h: spacing - 4 }));
+    // Hitboxes are kept in view coordinates, so undo any UI scaling or offset in effect.
+    const m = ctx.getTransform(), k = m.a / dpr, mx = m.e / dpr, my = m.f / dpr;
+    menuHitboxes = items.map((_, i) => ({
+      x: mx + k * (W / 2 - width / 2), y: my + k * (y + i * spacing - spacing / 2 + 2), w: k * width, h: k * (spacing - 4),
+    }));
     items.forEach((label, i) => {
       const yy = y + i * spacing;
       const selected = i === menuIndex;
@@ -4936,6 +4992,9 @@
     drawFrog(W / 2 - 250, gy - hop * 70, 1, { sx: 3 / Math.sqrt(sq), sy: 3 * sq, air: hop > 0.15 });
     drawFly(W / 2 - 190 + Math.sin(time * 2) * 25, gy - 170 + Math.cos(time * 3) * 15, time);
 
+    // The logo, controls and menu are laid out for a 540-tall screen; keep them centred on a taller one.
+    ctx.save();
+    ctx.translate(0, (H - 540) / 2);
     ctx.lineWidth = 8;
     ctx.strokeStyle = '#2f7d32';
     ctx.lineJoin = 'round';
@@ -4987,6 +5046,7 @@
     ctx.fill();
     drawMenu(items, lay.first, 280, lay.gap);
     text(hint('↑ ↓ choose · Enter select', 'Tap an option', '↑ ↓ choose · A select'), W / 2, lay.hint, 14, '#20452d', 'center', 'normal');
+    ctx.restore();
     if (highScore > 0) text(`Best: ${highScore}`, W - 20, 24, 16, '#20452d', 'right');
     const lilies = lilyTotals();
     if (lilies.found > 0) {
