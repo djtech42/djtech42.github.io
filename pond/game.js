@@ -177,10 +177,7 @@
   // Leaving the game (switching windows, tabs or apps) pauses it and quiets the ambience.
   function pauseInBackground() {
     keysDown.clear();
-    if (state === 'playing') {
-      state = 'paused';
-      menuIndex = 0; // on Resume, not whatever the last menu had selected
-    }
+    if (state === 'playing') pauseGame();
     ambient.silence();
     ambience.hush();
   }
@@ -301,6 +298,7 @@
   const audio = {
     ctx: null,
     master: null,
+    muffler: null, // low-pass filter between the master and the speakers (see setMuffled)
     muted: false,
     unlock() {
       if (!this.ctx) {
@@ -1175,7 +1173,8 @@
   // ---------------------------------------------------------------------------
   // Game state
   // ---------------------------------------------------------------------------
-  let state = 'title'; // title | select | dev | playing | paused | dying | complete | gameover | victory
+  // title | select (level select) | dev | playing | paused | dying | complete | gameover | victory
+  let state = 'title';
   let time = 0;
   let levelIndex = 0;
   let level = null;
@@ -1213,8 +1212,8 @@
     return items;
   }
   const titleItems = () => titleMenu().map((item) => item.label);
-  // Level select: the tutorial, then every level.
-  const selectItems = () => [`Tutorial: ${window.TUTORIAL.name}`, ...window.LEVELS.map((l, i) => `${i + 1}. ${l.name}`)];
+  // Level select: the tutorial, then every level, then a way back (touch screens have no Esc).
+  const selectItems = () => [`Tutorial: ${window.TUTORIAL.name}`, ...window.LEVELS.map((l, i) => `${i + 1}. ${l.name}`), 'Back'];
   const pauseItems = () => ['Resume', 'Restart level', `Sound: ${audio.muted ? 'Off' : 'On'}`, `Music: ${musicOn ? 'On' : 'Off'}`, 'Quit to title'];
 
   // Dev mode: jump straight to any level. Dev runs never save a best score.
@@ -1229,7 +1228,7 @@
     const lvl = window.LEVELS.find((l) => l.theme === devSong);
     return lvl ? lvl.name : devSong;
   }
-  const DEV_LEVEL_COUNT = () => window.LEVELS.length + 1; // tutorial + levels
+  const devLevelCount = () => window.LEVELS.length + 1; // tutorial + levels
   function devItems() {
     return [
       `Tutorial: ${window.TUTORIAL.name}`,
@@ -1266,6 +1265,8 @@
       lilies: [],
       fireflies: [],
       icicles: [],
+      tadpoles: [],
+      froglets: [],
       boss: null,
       par: def.par || 0,
       goal: null,
@@ -1304,6 +1305,8 @@
           case 'y': lvl.fireflies.push({ kind: 'firefly', ax: px + T / 2, ay: py + T / 2, x: px + T / 2, y: py + T / 2, w: 0, h: 0, phase: Math.random() * 10, eaten: false, caught: false }); ch = ' '; break;
           case '%': lvl.lilies.push(makeLily(px, py)); ch = 'F'; break;
           case 'q': lvl.enemies.push(makeSquirrel(px + 4, py + T - 22)); ch = ' '; break;
+          case 't': lvl.tadpoles.push(makeTadpoles(px + T / 2, py + T / 2)); ch = '~'; break;
+          case 'j': lvl.froglets.push(makeFroglet(px + T / 2, py + T)); ch = ' '; break;
           case 'n': lvl.icicles.push({ x: px + T / 2, y: py, state: 'hang', t: 0, vy: 0 }); ch = ' '; break;
           case 'R': lvl.boss = makeHeron(px + T / 2, py + T); ch = ' '; break;
           case 'H': lvl.hooks.push({ x: px + T / 2, y: py + T / 2, tx: x, ty: y }); ch = ' '; break;
@@ -1407,6 +1410,7 @@
     for (const p of lvl.platforms) avoid(p.ox !== undefined ? p.ox : p.x, p.oy !== undefined ? p.oy : p.y, 5 * T);
     for (const c of lvl.checkpoints) avoid(c.x, c.y + c.h, 3 * T);
     for (const sign of lvl.signs) avoid(sign.x, sign.y, 4 * T);
+    for (const fr of lvl.froglets) avoid(fr.homeX, fr.y, 4 * T);
     const spots = [];
     // Skip the top rows: ledges up there (like the lagoon's big rock) are out of the frog's reach.
     for (let ty = 5; ty < lvl.h; ty++) {
@@ -1484,6 +1488,7 @@
       tongueBuffer: 0, // a tongue press is remembered briefly if the tongue is busy
       lastHook: null, // the hook just let go of, which can't be re-grabbed straight away
       lastHookTimer: 0,
+      hops: 0, // counts jumps off the ground, so froglets can copy them
       tongue: { state: 'idle', len: 0, dir: 1, ax: 1, ay: 0, caught: null, cooldown: 0, hook: null, rope: 0 },
     };
   }
@@ -1712,6 +1717,22 @@
   function makeSwimmer(x, y) {
     return { kind: 'swimmer', x, y, w: 24, h: 16, ox: x, oy: y, dir: Math.random() < 0.5 ? -1 : 1, t: Math.random() * 10, dead: false, squashed: 0 };
   }
+  // Tadpoles and froglets are harmless scenery that reacts to the frog. The tongue
+  // ignores them, and they never hurt.
+  function makeTadpoles(x, y) {
+    const kids = [];
+    for (let i = 0; i < 7; i++) {
+      kids.push({ x: x + rand(-20, 20), y: y + rand(-6, 6), vx: 0, vy: 0, phase: i * 0.9 + Math.random(), wiggle: Math.random() * 6, dir: 1 });
+    }
+    return { ax: x, ay: y, t: Math.random() * 10, kids };
+  }
+  function makeFroglet(cx, groundY) {
+    return {
+      x: cx - 6, y: groundY - 10, w: 12, h: 10, vx: 0, vy: 0,
+      homeX: cx, facing: Math.random() < 0.5 ? -1 : 1, grounded: true,
+      wait: rand(0.5, 3), copy: 0, copyDir: 1, seenHops: null, blink: 0, squash: 1,
+    };
+  }
   function makeLilyPad(px, py, tx) {
     const x = px - 8, y = py + 4;
     return {
@@ -1743,7 +1764,7 @@
     e.y = shellTop + 1;
   }
   function makePlatform(x, y, axis) {
-    const p = {
+    return {
       axis, x, y, w: T * 3, h: 16,
       ox: x, oy: y,
       range: axis === 'h' ? T * 2 : T * 2.5,
@@ -1751,7 +1772,6 @@
       phase: (x / T) * 0.7,
       dx: 0, dy: 0, prevY: y,
     };
-    return p;
   }
 
   function enterLevel(def) {
@@ -1853,6 +1873,13 @@
     goToTitle();
   }
 
+  // Always opens the pause menu on Resume. (The cursor may still be wherever it was on the
+  // title or level select, and confirming an out-of-range item would quit to the title.)
+  function pauseGame() {
+    state = 'paused';
+    menuIndex = 0;
+  }
+
   function menuNav(count) {
     if (tapped('menuUp')) { menuIndex = (menuIndex + count - 1) % count; sfx.select(); }
     if (tapped('menuDown')) { menuIndex = (menuIndex + 1) % count; sfx.select(); }
@@ -1862,6 +1889,7 @@
     const spawn = player.spawn;
     const fresh = makePlayer(spawn.x, spawn.y);
     fresh.spawn = spawn;
+    fresh.hops = player.hops; // froglets compare against this, so a reset would look like a jump
     fresh.invuln = 1.5;
     player = fresh;
     for (const p of level.platforms) {
@@ -2030,8 +2058,9 @@
 
       case 'select': {
         cam.x = (time * 60) % 2000;
-        menuNav(selectItems().length);
-        if (tapped('pause') || tapped('back')) {
+        const count = selectItems().length;
+        menuNav(count);
+        if (tapped('pause') || tapped('back') || (tapped('confirm') && menuIndex === count - 1)) {
           sfx.select();
           goToTitle();
         } else if (tapped('confirm')) {
@@ -2056,13 +2085,13 @@
           sfx.select();
           goToTitle();
         } else if (tapped('confirm')) {
-          if (menuIndex === DEV_LEVEL_COUNT()) {
+          if (menuIndex === devLevelCount()) {
             devInvincible = !devInvincible;
             sfx.select();
-          } else if (menuIndex === DEV_LEVEL_COUNT() + 1) {
+          } else if (menuIndex === devLevelCount() + 1) {
             devCameo = CAMEO_MODES[(CAMEO_MODES.indexOf(devCameo) + 1) % CAMEO_MODES.length];
             sfx.select();
-          } else if (menuIndex === DEV_LEVEL_COUNT() + 2) {
+          } else if (menuIndex === devLevelCount() + 2) {
             const names = [null, ...Object.keys(window.SONGS || {})];
             devSong = names[(names.indexOf(devSong) + 1) % names.length];
             sfx.select();
@@ -2081,7 +2110,7 @@
       }
 
       case 'playing':
-        if (tapped('pause')) { state = 'paused'; menuIndex = 0; sfx.select(); break; }
+        if (tapped('pause')) { pauseGame(); sfx.select(); break; }
         if (tapped('restart')) { restartLevel(); break; }
         updateWorld(dt);
         break;
@@ -2670,6 +2699,7 @@
         p.grounded = false;
         p.riding = null;
         p.squash = 0.7;
+        p.hops++;
         sfx.jump();
         dust(p.x + p.w / 2, p.y + p.h, 5);
       }
@@ -2689,8 +2719,8 @@
     p.onOneWay = false;
     const prevBottom = p.y + p.h;
     const hitY = moveY(p, p.vy * dt, p.dropTimer <= 0);
-    if (hitY === 'down') p.grounded = true;
     if (hitY === 'down') {
+      p.grounded = true;
       // Mushroom caps bounce the frog up; holding jump bounces higher.
       const row = Math.floor((p.y + p.h + 1) / T);
       const lx = Math.floor((p.x + 3) / T), rx = Math.floor((p.x + p.w - 3) / T);
@@ -3027,6 +3057,123 @@
       if (k.x < cam.x - 40 || k.x > cam.x + W + 40) continue;
       if (Math.random() < dt * 0.35) bubble(k.x + rand(-6, 6), k.y - k.h * rand(0.3, 1));
     }
+    updateTadpoles(dt);
+    updateFroglets(dt);
+  }
+
+  // A school of tadpoles drifts around its spot. A frog floating nearby draws them in to
+  // circle it; one swimming fast through the school scatters them.
+  function updateTadpoles(dt) {
+    const p = player;
+    const pc = frogCenter(p);
+    const speed = Math.hypot(p.vx, p.vy);
+    for (const sc of level.tadpoles) {
+      if (Math.abs(sc.ax - pc.x) > W) continue;
+      if (sc.mid === undefined) {
+        // Wander across the stretch of water the school starts in (up to a few tiles).
+        const ty = Math.floor(sc.ay / T);
+        let l = Math.floor(sc.ax / T), r = l;
+        while (isWaterTile(tileAt(l - 1, ty)) && sc.ax - l * T < 6 * T) l--;
+        while (isWaterTile(tileAt(r + 1, ty)) && (r + 1) * T - sc.ax < 6 * T) r++;
+        sc.mid = (l + r + 1) * T / 2;
+        sc.range = Math.max(0, ((r + 1 - l) * T) / 2 - 40);
+      }
+      sc.t += dt;
+      const cx = sc.mid + Math.sin(sc.t * 0.35) * sc.range;
+      const cy = sc.ay + Math.sin(sc.t * 0.55) * 8;
+      for (const k of sc.kids) {
+        const dx = k.x - pc.x, dy = k.y - pc.y;
+        const d = Math.hypot(dx, dy) || 1;
+        let tx, ty, max = 70;
+        if (p.inWater && d < 80 && speed > 120) {
+          // Scatter away from the frog.
+          tx = k.x + dx / d * 60;
+          ty = k.y + dy / d * 60;
+          max = 230;
+        } else if (p.inWater && d < 4 * T && state === 'playing') {
+          tx = pc.x + Math.cos(sc.t * 1.3 + k.phase) * 30;
+          ty = pc.y + Math.sin(sc.t * 1.7 + k.phase) * 18;
+        } else {
+          tx = cx + Math.cos(sc.t * 0.8 + k.phase) * 26;
+          ty = cy + Math.sin(sc.t * 1.1 + k.phase * 1.7) * 10;
+        }
+        k.vx += ((tx - k.x) * 3 - k.vx) * Math.min(1, dt * 4);
+        k.vy += ((ty - k.y) * 3 - k.vy) * Math.min(1, dt * 4);
+        const v = Math.hypot(k.vx, k.vy);
+        if (v > max) { k.vx *= max / v; k.vy *= max / v; }
+        // Stay in the water, a few pixels below the visible surface.
+        const nx = k.x + k.vx * dt, ny = k.y + k.vy * dt;
+        if (waterAtPx(nx + Math.sign(k.vx) * 6, k.y) && waterAtPx(nx, k.y - 14)) k.x = nx; else k.vx *= -0.5;
+        if (waterAtPx(k.x, ny + 4) && waterAtPx(k.x, ny - 14)) k.y = ny; else k.vy *= -0.5;
+        if (Math.abs(k.vx) > 8) k.dir = Math.sign(k.vx);
+        k.wiggle += dt * (8 + v * 0.12);
+      }
+    }
+  }
+
+  // Froglets hop about near home, copy the frog's jumps when it's nearby (follow the
+  // leader), and skip out of the way when it comes bounding up to them.
+  function updateFroglets(dt) {
+    const p = player;
+    const pc = frogCenter(p);
+    for (const fr of level.froglets) {
+      if (fr.seenHops === null) fr.seenHops = p.hops;
+      fr.blink = fr.blink > 0 ? fr.blink - dt : (Math.random() < 0.004 ? 0.12 : 0);
+      fr.squash += (1 - fr.squash) * Math.min(1, dt * 12);
+      const wasGrounded = fr.grounded;
+      fr.vy = Math.min(fr.vy + GRAVITY * dt, MAX_FALL);
+      moveX(fr, fr.vx * dt);
+      fr.grounded = moveY(fr, fr.vy * dt, true) === 'down';
+      if (fr.grounded && !wasGrounded) { fr.vx = 0; fr.squash = 0.75; }
+      if (!fr.grounded) continue;
+
+      const dx = fr.x + fr.w / 2 - pc.x, dy = fr.y + fr.h / 2 - pc.y;
+      const near = Math.abs(dx) < 6 * T && Math.abs(dy) < 3 * T;
+      if (p.hops !== fr.seenHops) {
+        fr.seenHops = p.hops;
+        if (near && state === 'playing') {
+          // Each froglet copies a moment later than the last, so they jump in a ripple.
+          fr.copy = 0.12 + Math.abs(dx) / (6 * T) * 0.3;
+          fr.copyDir = p.facing;
+        }
+      }
+      if (fr.copy > 0) {
+        fr.copy -= dt;
+        if (fr.copy <= 0) frogletHop(fr, fr.copyDir, true);
+      } else if (Math.abs(dx) < 34 && Math.abs(dy) < T && Math.abs(p.vx) > 60) {
+        frogletHop(fr, Math.sign(dx) || 1, false);
+      } else {
+        fr.wait -= dt;
+        if (fr.wait <= 0) {
+          fr.wait = rand(1.5, 4);
+          frogletHop(fr, Math.random() < 0.5 ? -1 : 1, false);
+        }
+      }
+    }
+  }
+
+  // Would a froglet hopping `dir` land on solid ground (not in water, thorns or a wall)?
+  function safeFrogletLanding(fr, dir, dist) {
+    const tx = Math.floor((fr.x + fr.w / 2 + dir * dist) / T);
+    const ty = Math.floor((fr.y + fr.h - 1) / T);
+    const body = tileAt(tx, ty), below = tileAt(tx, ty + 1);
+    return !SOLID.has(body) && body !== '^' && !isWaterTile(body) && (below === '#' || below === 'B');
+  }
+
+  function frogletHop(fr, dir, big) {
+    const vx = big ? 60 : 70;
+    const vy = big ? 420 : 240;
+    const dist = vx * 2 * vy / GRAVITY + 8;
+    // Wander no more than a couple of tiles from home.
+    if (Math.abs(fr.x + fr.w / 2 + dir * dist - fr.homeX) > 2.5 * T) dir = -dir;
+    if (!safeFrogletLanding(fr, dir, dist)) dir = safeFrogletLanding(fr, -dir, dist) ? -dir : 0;
+    if (dir) fr.facing = dir;
+    fr.vx = dir * vx;
+    fr.vy = -vy;
+    fr.grounded = false;
+    fr.squash = 0.7;
+    const h = hearing(fr.x, fr.y, 120, 500);
+    if (h.vol > 0.02) audio.tone('triangle', big ? 700 : 600, big ? 1300 : 1000, 0.06, 0.12 * h.vol, 0, h.pan);
   }
 
   function checkInteractions() {
@@ -3259,8 +3406,10 @@
     drawMushrooms();
     drawIcicles();
     drawKelp();
+    drawTadpoles();
     drawSigns();
     drawCheckpoints();
+    drawFroglets();
     drawGoal();
     drawPlatforms();
     drawHooks();
@@ -4581,6 +4730,54 @@
     ctx.restore();
   }
 
+  function drawTadpoles() {
+    ctx.lineCap = 'round';
+    for (const sc of level.tadpoles) {
+      for (const k of sc.kids) {
+        if (k.x < cam.x - 20 || k.x > cam.x + W + 20) continue;
+        ctx.save();
+        ctx.translate(k.x, k.y);
+        ctx.scale(k.dir, 1);
+        ctx.rotate(clamp(k.vy / 200, -0.5, 0.5) * k.dir);
+        // Tail: a tapering wiggle behind the head.
+        ctx.strokeStyle = 'rgba(70,64,44,0.85)';
+        for (let i = 0; i < 3; i++) {
+          ctx.lineWidth = 2.6 - i * 0.8;
+          ctx.beginPath();
+          ctx.moveTo(-3 - i * 3, Math.sin(k.wiggle - i * 1.1) * i * 1.2);
+          ctx.lineTo(-6 - i * 3, Math.sin(k.wiggle - (i + 1) * 1.1) * (i + 1) * 1.2);
+          ctx.stroke();
+        }
+        ctx.fillStyle = '#4a4430';
+        ellipse(0, 0, 5, 3.8);
+        ctx.fill();
+        ctx.fillStyle = 'rgba(200,190,140,0.5)';
+        ellipse(1, 1.4, 2.8, 1.4);
+        ctx.fill();
+        ctx.fillStyle = '#fff';
+        circle(2.6, -1.2, 1.2);
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+    ctx.lineCap = 'butt';
+  }
+
+  function drawFroglets() {
+    for (const fr of level.froglets) {
+      const x = fr.x + fr.w / 2;
+      if (x < cam.x - 30 || x > cam.x + W + 30) continue;
+      const air = !fr.grounded;
+      const stretch = air ? clamp(-fr.vy / 1400, -0.12, 0.2) : 0;
+      const s = 0.5;
+      drawFrog(x, fr.y + fr.h, fr.facing, {
+        sx: s / Math.sqrt(fr.squash) * (1 - stretch * 0.6),
+        sy: s * fr.squash * (1 + stretch),
+        air, blink: fr.blink > 0, tail: true,
+      });
+    }
+  }
+
   function drawPlayer() {
     const p = player;
     if (p.invuln > 0 && state === 'playing' && Math.floor(time * 16) % 2 === 0) return;
@@ -4645,6 +4842,13 @@
     ctx.lineWidth = 2;
     ctx.strokeStyle = GD;
     ctx.lineJoin = 'round';
+
+    // A froglet still has the stub of its tadpole tail.
+    if (o.tail) {
+      ctx.fillStyle = G;
+      ellipse(-14, -7, 6, 2.6, -0.35);
+      ctx.fill(); ctx.stroke();
+    }
 
     // Back leg
     ctx.fillStyle = G;
@@ -4756,7 +4960,7 @@
 
   function drawPopups() {
     ctx.textAlign = 'center';
-    ctx.font = 'bold 16px "Trebuchet MS", system-ui, sans-serif';
+    ctx.font = `bold 16px ${FONT}`;
     for (const pu of popups) {
       ctx.globalAlpha = clamp(pu.life / 0.5, 0, 1);
       ctx.fillStyle = 'rgba(0,0,0,0.45)';
@@ -4983,7 +5187,7 @@
     });
     const lilies = lilyTotals();
     text(`Golden lilies found: ${lilies.found}/${lilies.total}`, W / 2, top + 84 + items.length * gap - 4, 15, '#f2e3a0', 'center', 'normal');
-    text(hint('↑ ↓ choose · Enter play · Esc back', 'Tap a level', '↑ ↓ choose · A play · B back'), W / 2, top + 84 + items.length * gap + 20, 14, '#b9d8c0', 'center', 'normal');
+    text(hint('↑ ↓ choose · Enter play · Esc back', 'Tap a level, or Back', '↑ ↓ choose · A play · B back'), W / 2, top + 84 + items.length * gap + 20, 14, '#b9d8c0', 'center', 'normal');
   }
 
   function drawDevScreen() {
@@ -5114,6 +5318,80 @@
   }
   requestAnimationFrame(frame);
 
+  // Runs `build` with an offline audio context standing in for the live one, and renders it.
+  function renderOffline(seconds, build) {
+    const live = { ctx: audio.ctx, master: audio.master, out: music.out, noise: music.noise, current: music.current, intensity: music.intensity };
+    const off = new OfflineAudioContext(2, Math.ceil(44100 * seconds), 44100);
+    try {
+      audio.ctx = off;
+      audio.master = off.createGain();
+      audio.master.gain.value = 0.22;
+      audio.master.connect(off.destination);
+      music.out = null;
+      build();
+    } finally {
+      Object.assign(audio, { ctx: live.ctx, master: live.master });
+      Object.assign(music, { out: live.out, noise: live.noise, current: live.current, intensity: live.intensity });
+    }
+    return off.startRendering();
+  }
+  // Plays a song into the (offline) context from time 0, with music.intensity following `intensityAt(loop)`.
+  function scheduleSong(name, until, intensityAt) {
+    music.init();
+    music.out.gain.value = MUSIC_VOLUME;
+    music.start(name);
+    const cur = music.current;
+    cur.next = 0;
+    while (cur.next < until) {
+      music.intensity = intensityAt(cur.loop);
+      music.schedule(cur.next + 1e-6); // one step at a time, so the intensity can change between loops
+    }
+  }
+
+  // Records a song as a WAV: enough loops for every part to have its turn (the heron's builds up
+  // a layer a loop, like the jukebox), then a fade. It's normalized, so the file isn't game-quiet.
+  const EXPORT_FADE = 8;
+  const EXPORT_TAIL = 2;
+  async function songWav(name) {
+    if (!music.compile() || !songs[name]) throw new Error(`No song "${name}"`);
+    const song = songs[name];
+    const fight = song.parts.some((p) => p.from);
+    const intensityAt = (loop) => (fight ? Math.min(4, loop) : 0);
+    const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+    let loops = song.parts.reduce((n, p) => (p.loops ? n * p.loops.length / gcd(n, p.loops.length) : n), 1);
+    loops = Math.max(2, fight ? 5 : loops);
+    let seconds = 0;
+    for (let k = 0; k < loops; k++) {
+      const bpm = song.bpm + (song.bpmPerHit || 0) * Math.max(0, intensityAt(k) - 1);
+      seconds += song.length * 60 / bpm / song.beat;
+    }
+    const buf = await renderOffline(seconds + EXPORT_FADE + EXPORT_TAIL, () => {
+      scheduleSong(name, seconds + EXPORT_FADE, intensityAt);
+      music.out.gain.setValueAtTime(MUSIC_VOLUME, seconds);
+      music.out.gain.linearRampToValueAtTime(0, seconds + EXPORT_FADE);
+    });
+    // 16-bit stereo PCM, peaking at -1 dB.
+    const chans = [0, 1].map((c) => buf.getChannelData(c));
+    let peak = 0;
+    for (const d of chans) for (const v of d) peak = Math.max(peak, Math.abs(v));
+    const gain = peak > 0 ? 0.89 / peak : 1;
+    const bytes = buf.length * 4;
+    const out = new DataView(new ArrayBuffer(44 + bytes));
+    const text = (at, s) => { for (let i = 0; i < s.length; i++) out.setUint8(at + i, s.charCodeAt(i)); };
+    text(0, 'RIFF'); out.setUint32(4, 36 + bytes, true); text(8, 'WAVE');
+    text(12, 'fmt '); out.setUint32(16, 16, true); out.setUint16(20, 1, true); out.setUint16(22, 2, true);
+    out.setUint32(24, buf.sampleRate, true); out.setUint32(28, buf.sampleRate * 4, true); out.setUint16(32, 4, true); out.setUint16(34, 16, true);
+    text(36, 'data'); out.setUint32(40, bytes, true);
+    for (let i = 0, at = 44; i < buf.length; i++) {
+      for (const d of chans) {
+        const v = Math.max(-1, Math.min(1, d[i] * gain));
+        out.setInt16(at, v < 0 ? v * 0x8000 : v * 0x7fff, true);
+        at += 2;
+      }
+    }
+    return new Blob([out], { type: 'audio/wav' });
+  }
+
   // Handy for debugging from the console.
   window.lilyLeap = {
     get state() { return state; },
@@ -5133,32 +5411,25 @@
     // await lilyLeap.measure('song', 'meadow', 20) or await lilyLeap.measure('sfx', 'jump').
     measure: async (kind, name, seconds = 2, intensity = 0) => {
       if (!music.compile()) return null;
-      const live = { ctx: audio.ctx, master: audio.master, out: music.out, noise: music.noise, current: music.current, intensity: music.intensity };
-      const off = new OfflineAudioContext(2, Math.ceil(44100 * seconds), 44100);
-      try {
-        audio.ctx = off;
-        audio.master = off.createGain();
-        audio.master.gain.value = 0.22;
-        audio.master.connect(off.destination);
-        if (kind === 'song') {
-          music.out = null;
-          music.init();
-          music.out.gain.value = MUSIC_VOLUME;
-          music.intensity = intensity;
-          music.start(name);
-          music.current.next = 0;
-          music.schedule(seconds);
-        } else {
-          sfx[name]();
-        }
-      } finally {
-        Object.assign(audio, { ctx: live.ctx, master: live.master });
-        Object.assign(music, { out: live.out, noise: live.noise, current: live.current, intensity: live.intensity });
-      }
-      const data = (await off.startRendering()).getChannelData(0);
+      const buf = await renderOffline(seconds, () => {
+        if (kind === 'song') scheduleSong(name, seconds, () => intensity);
+        else sfx[name]();
+      });
+      const data = buf.getChannelData(0);
       let peak = 0, sum = 0;
       for (const v of data) { peak = Math.max(peak, Math.abs(v)); sum += v * v; }
       return { peak: +peak.toFixed(3), rms: +Math.sqrt(sum / data.length).toFixed(4) };
+    },
+    // Downloads songs as WAV files: lilyLeap.exportSongs('meadow'), or every song with no names.
+    songWav,
+    exportSongs: async (...names) => {
+      for (const name of names.length ? names : Object.keys(window.SONGS)) {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(await songWav(name));
+        a.download = `lily-leap-${name}.wav`;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+      }
     },
   };
 })();

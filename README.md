@@ -25,7 +25,7 @@ Then open <http://localhost:8000/>. The game is at <http://localhost:8000/pond/>
 
 ## Lily Leap
 
-A canvas platformer with a tutorial and eight levels, the last a heron boss fight. It plays with a keyboard, touch or a gamepad. All art is drawn in code and all sound is synthesized with Web Audio, so there are no asset files.
+A canvas platformer with a tutorial and eight levels, the last a heron boss fight. The game is developed in the [Lily-Leap](https://github.com/djtech42/Lily-Leap) repository and `pond/` is a copy of it, the same apart from a `noindex` tag in `pond/index.html`. It plays with a keyboard, touch or a gamepad. All art is drawn in code and all sound is synthesized with Web Audio, so there are no asset files.
 
 | File | What it holds |
 | --- | --- |
@@ -42,7 +42,7 @@ A canvas platformer with a tutorial and eight levels, the last a heron boss figh
 ### Dev tools
 
 - Press <kbd>`</kbd> on the title screen for dev mode. It can jump to any level, turn on invincibility, force the snail cameo, and play any song on a jukebox. Dev runs never save scores or progress.
-- In the browser console, `window.lilyLeap` exposes the game state and a few helpers: `loadLevel(i)`, `press(code)` / `release(code)`, `step(n)`, and `measure(kind, name)` for checking audio levels offline.
+- In the browser console, `window.lilyLeap` exposes the game state and a few helpers: `loadLevel(i)`, `press(code)` / `release(code)`, `step(n)`, `measure(kind, name)` for checking audio levels offline, and `exportSongs(...names)` to download songs as WAV files.
 
 ### Saved data
 

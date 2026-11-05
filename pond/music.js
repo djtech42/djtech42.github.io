@@ -15,6 +15,7 @@
 //            '-' to hold the previous note, '.' for silence. '|' is ignored (bar lines).
 //   bass     one bar, repeated: R root, 3 third, 5 fifth, 7 seventh, 8 octave, L fifth below
 //   arp      one bar, repeated: 1, 2, 3... climb through the chord's notes
+//            (in bass and arp patterns too, '-' holds the previous note and '.' is silence)
 //   stab     one bar, repeated: x plays the whole chord
 //   pad      the chord held for as long as it lasts
 //   drums    { kick, snare, hat, wood, shaker, tom }: one bar each, x hit, o soft hit
