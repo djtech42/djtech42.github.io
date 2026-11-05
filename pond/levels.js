@@ -245,7 +245,7 @@ window.TUTORIAL = {
     'Ride floating logs across gaps. Falling off the bottom of the screen costs a life!',
     'Thorns hurt! You have three hearts per life. Losing all of them costs a life.',
     { key: 'A vine hook! Hold X, J or Shift to grab it when it lights up, and swing with ← →. Let go to fly, or keep holding and jump to swing straight onto the next hook!', touch: 'A vine hook! Hold Tongue to grab it when it lights up, and swing with ◀ ▶. Let go to fly, or keep holding and tap Jump to swing straight onto the next hook!', pad: 'A vine hook! Hold X, B or RB to grab it when it lights up, and swing left and right. Let go to fly, or keep holding and press A to swing straight onto the next hook!' },
-    'Psst! Some walls are fake. Look for faint cracks and walk right in. Every level hides one golden lily.',
+    'Psst! Some walls are fake. Look for faint cracks and walk right in. Most levels hide a golden lily.',
     { key: 'Reach the lotus flag to finish a level. Press P or Esc any time to pause or quit.', touch: 'Reach the lotus flag to finish a level. Tap the pause button any time to pause or quit.', pad: 'Reach the lotus flag to finish a level. Press Start any time to pause or quit.' },
   ],
   map: [

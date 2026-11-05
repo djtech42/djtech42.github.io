@@ -174,17 +174,19 @@
     audio.unlock();
   });
   window.addEventListener('keyup', (e) => keysDown.delete(e.code));
-  window.addEventListener('blur', () => {
+  // Leaving the game (switching windows, tabs or apps) pauses it and quiets the ambience.
+  function pauseInBackground() {
     keysDown.clear();
-    if (state === 'playing') state = 'paused';
+    if (state === 'playing') {
+      state = 'paused';
+      menuIndex = 0; // on Resume, not whatever the last menu had selected
+    }
     ambient.silence();
     ambience.hush();
-  });
+  }
+  window.addEventListener('blur', pauseInBackground);
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) {
-      ambient.silence();
-      ambience.hush();
-    }
+    if (document.hidden) pauseInBackground();
   });
 
   // Gamepads (standard mapping, so Xbox-style names: A jump, X/B/RB/RT tongue, Start pause).
@@ -795,7 +797,8 @@
   // Wraps a pitch class into the octave starting at `low`.
   const placeAbove = (pc, low) => low + ((pc - low) % 12 + 12) % 12;
 
-  // Turns a song from music.js into per-step chords and token lists.
+  // Turns a song from music.js into per-step chords and token lists. Every note and
+  // instrument is checked here, so a typo throws now rather than mid-game.
   function compileSong(def) {
     const chordAt = [];
     const chordStart = []; // true where a new chord begins
@@ -807,14 +810,29 @@
         chordStart.push(s === 0 || Math.floor((s - 1) * cs.length / def.steps) !== k);
       }
     }
-    const parts = Object.values(def.parts).map((p) => ({
-      ...p,
-      notes: p.notes ? tokens(p.notes) : null,
-      bass: p.bass ? bars(p.bass) : null,
-      arp: p.arp ? bars(p.arp) : null,
-      stab: p.stab ? bars(p.stab) : null,
-      drums: p.drums ? Object.entries(p.drums).map(([kind, pat]) => ({ kind, bars: bars(pat) })) : null,
-    }));
+    const parts = Object.entries(def.parts).map(([name, p]) => {
+      if (p.inst && !INSTRUMENTS[p.inst]) throw new Error(`Unknown instrument "${p.inst}" in part "${name}"`);
+      if (!p.inst && !p.drums) throw new Error(`Part "${name}" needs an instrument`);
+      const notes = p.notes ? tokens(p.notes) : null;
+      if (notes) {
+        if (notes.length !== chordAt.length) throw new Error(`Part "${name}" has ${notes.length} steps, but the song has ${chordAt.length}`);
+        notes.forEach((tok) => { if (tok !== '-' && tok !== '.') noteMidi(tok); });
+      }
+      // One-bar patterns must fill exactly one bar.
+      const barsOf = (pat, what) => {
+        const list = bars(pat);
+        if (list.some((bar) => bar.length !== def.steps)) throw new Error(`A ${what} bar in part "${name}" isn't ${def.steps} steps long`);
+        return list;
+      };
+      return {
+        ...p,
+        notes,
+        bass: p.bass ? barsOf(p.bass, 'bass') : null,
+        arp: p.arp ? barsOf(p.arp, 'arp') : null,
+        stab: p.stab ? barsOf(p.stab, 'stab') : null,
+        drums: p.drums ? Object.entries(p.drums).map(([kind, pat]) => ({ kind, bars: barsOf(pat, kind) })) : null,
+      };
+    });
     return { ...def, parts, chordAt, chordStart, length: chordAt.length };
   }
   let songs = null; // compiled on first use, so a mistake in music.js only breaks the music
@@ -1036,9 +1054,18 @@
     },
     compile() {
       if (songs) return true;
+      if (!window.SONGS) return false; // missing, or turned off after an error
       try {
-        songs = {};
-        for (const [name, def] of Object.entries(window.SONGS)) songs[name] = compileSong(def);
+        const compiled = {};
+        for (const [name, def] of Object.entries(window.SONGS)) {
+          try {
+            compiled[name] = compileSong(def);
+          } catch (err) {
+            err.message = `${name}: ${err.message}`;
+            throw err;
+          }
+        }
+        songs = compiled;
         return true;
       } catch (err) {
         console.error('Music disabled:', err);
@@ -1148,7 +1175,7 @@
   // ---------------------------------------------------------------------------
   // Game state
   // ---------------------------------------------------------------------------
-  let state = 'title'; // title | playing | paused | dying | complete | gameover | victory
+  let state = 'title'; // title | select | dev | playing | paused | dying | complete | gameover | victory
   let time = 0;
   let levelIndex = 0;
   let level = null;
@@ -2453,7 +2480,6 @@
     return { x: p.x + p.w / 2, y: p.y + p.h / 2 };
   }
 
-  // The nearest hook above the frog, in front of it (or nearly overhead), with a clear line.
   // The best hook above the frog within reach and with a clear line. Hooks ahead are
   // preferred, but one just flown past still counts (except the one just let go of).
   function findHook(p, exclude) {
@@ -2993,6 +3019,9 @@
         e.y = e.oy + Math.sin(e.t * 2) * 6;
       }
     }
+
+    // Acorns and diving wasps are spawned on the fly; drop them once they're gone.
+    level.enemies = level.enemies.filter((e) => !(e.dead && (e.kind === 'acorn' || e.diver)));
 
     for (const k of level.kelp) {
       if (k.x < cam.x - 40 || k.x > cam.x + W + 40) continue;
@@ -5104,7 +5133,7 @@
     // await lilyLeap.measure('song', 'meadow', 20) or await lilyLeap.measure('sfx', 'jump').
     measure: async (kind, name, seconds = 2, intensity = 0) => {
       if (!music.compile()) return null;
-      const live = { ctx: audio.ctx, master: audio.master, out: music.out, current: music.current, intensity: music.intensity };
+      const live = { ctx: audio.ctx, master: audio.master, out: music.out, noise: music.noise, current: music.current, intensity: music.intensity };
       const off = new OfflineAudioContext(2, Math.ceil(44100 * seconds), 44100);
       try {
         audio.ctx = off;
@@ -5124,7 +5153,7 @@
         }
       } finally {
         Object.assign(audio, { ctx: live.ctx, master: live.master });
-        Object.assign(music, { out: live.out, current: live.current, intensity: live.intensity });
+        Object.assign(music, { out: live.out, noise: live.noise, current: live.current, intensity: live.intensity });
       }
       const data = (await off.startRendering()).getChannelData(0);
       let peak = 0, sum = 0;
